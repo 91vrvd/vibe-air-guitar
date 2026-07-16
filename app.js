@@ -394,8 +394,9 @@ let scoreTrack = {
 };
 const sampleCache = new Map();
 
-const lookaheadMs = 8;
-const scheduleAheadSeconds = 0.015;
+// Web Audio 稳定调度：短轮询 + 足够的前瞻窗口，避免繁忙设备出现节拍断裂。
+const lookaheadMs = 25;
+const scheduleAheadSeconds = 0.12;
 const gestureStabilityMs = 10;
 const releaseSeconds = 0.08;
 const chordFadeSeconds = 0.018;
@@ -869,7 +870,9 @@ function renderControls() {
 
 function ensureAudio() {
   if (!audioContext) {
-    audioContext = new AudioContext();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error("当前浏览器不支持 Web Audio");
+    audioContext = new AudioContextClass({ latencyHint: "interactive" });
     masterGain = audioContext.createGain();
     masterGain.gain.value = 0.9;
     masterGain.connect(audioContext.destination);
@@ -1121,29 +1124,38 @@ function switchFingerNow(finger) {
   lastConfirmedFinger = finger;
   lastConfirmedAt = performance.now();
   stopChordLoop();
-  nextStepTime = Math.min(nextStepTime, ctx.currentTime + 0.004);
   const chord = getChordForFinger(finger);
   if (!chord) return;
+  const profile = getRhythmProfile();
+  const division = scoreTrack.enabled && scoreTrack.events.length ? 16 : (profile.division || 8);
+  const stepDuration = (60 / Number(bpm.value)) / (division / 4);
+  const hitTime = ctx.currentTime + 0.004;
   const customFinger = customFingerSamples.get(finger);
   if (customFinger) {
-    playDecodedBuffer(customFinger.buffer, ctx.currentTime + 0.003, 0.76);
+    playDecodedBuffer(customFinger.buffer, hitTime, 0.76);
+    nextStepTime = hitTime + stepDuration;
     return;
   }
-  const profile = getRhythmProfile();
   if (scoreTrack.enabled && scoreTrack.events.length) {
-    scheduleScoreStep(chord, ctx.currentTime + 0.003, stepIndex, (60 / Number(bpm.value)) / 4);
+    scheduleScoreStep(chord, hitTime, stepIndex, stepDuration);
+    stepIndex += 1;
+    nextStepTime = hitTime + stepDuration;
     return;
   }
   if (playMode === "strum") {
-    if (!playChordStrum(chord, ctx.currentTime, "strum")) {
-      scheduleStrum(chord, ctx.currentTime + 0.003, stepIndex);
+    if (!playChordStrum(chord, hitTime, "strum")) {
+      scheduleStrum(chord, hitTime, stepIndex);
     }
   } else if (playMode === "arp") {
-    if (!playChordStrum(chord, ctx.currentTime, "arp", 0.54)) {
-      const stepDuration = (60 / Number(bpm.value)) / 2;
-      scheduleArp(chord, ctx.currentTime + 0.003, stepIndex, stepDuration);
+    if (!playChordStrum(chord, hitTime, "arp", 0.54)) {
+      scheduleArp(chord, hitTime, stepIndex, stepDuration);
     }
+  } else if (playMode === "custom") {
+    scheduleCustomMelody(chord, hitTime, stepIndex, stepDuration);
   }
+  // 即时击发已经占用当前步，下一次调度从后一拍开始，避免 4ms 内重复叠音。
+  stepIndex += 1;
+  nextStepTime = hitTime + stepDuration;
 }
 
 function applyPendingFinger() {
@@ -1240,11 +1252,20 @@ function playLayeredNote(note, start, gainValue, duration) {
   }
 }
 
+function scheduleBeatVisual(step, start, ctx) {
+  const delayMs = Math.max(0, (start - ctx.currentTime) * 1000);
+  window.setTimeout(() => {
+    if (isPlaying) updateBeatMeter(step);
+  }, delayMs);
+}
+
 function scheduleAudio() {
   const ctx = ensureAudio();
   const profile = getRhythmProfile();
   const division = scoreTrack.enabled && scoreTrack.events.length ? 16 : (profile.division || 8);
   const stepDuration = (60 / Number(bpm.value)) / (division / 4);
+  // 标签页休眠后丢弃过期节拍，防止恢复时一次补播大量旧事件。
+  if (nextStepTime < ctx.currentTime - 0.1) nextStepTime = ctx.currentTime + 0.03;
   while (nextStepTime < ctx.currentTime + scheduleAheadSeconds) {
     applyPendingFinger();
     renderLyrics();
@@ -1266,7 +1287,7 @@ function scheduleAudio() {
       }
     }
     if (drumsEnabled) scheduleDrums(nextStepTime, stepIndex, profile);
-    updateBeatMeter(stepIndex);
+    scheduleBeatVisual(stepIndex, nextStepTime, ctx);
 
     stepIndex += 1;
     nextStepTime += stepDuration + ((stepIndex % 2) ? profile.swing : -profile.swing);
@@ -1536,10 +1557,8 @@ function startTinboxChord(chord, gainValue = 0.32, voice = currentSynthVoice()) 
 }
 
 function playChordStrum(chord, start, kind = "strum", gainValue = 0.62) {
-  if (sampleInstruments[selectedInstrument]?.synth) {
-    startTinboxChord(chord, 0.28, currentSynthVoice());
-    return true;
-  }
+  // 合成音色必须跟随节奏型逐拍发声；持续和弦会吞掉扫弦/分解节奏。
+  if (sampleInstruments[selectedInstrument]?.synth) return false;
   if (
     selectedInstrument !== "guitar" ||
     !chord?.chord ||
@@ -2007,6 +2026,20 @@ function scheduleDrums(start, step) {
   playDrum("hat", start + 0.005, slot % 2 ? 0.06 : 0.09);
 }
 
+const drumNoiseCache = new Map();
+
+function getDrumNoiseBuffer(ctx, type) {
+  const key = type + ":" + ctx.sampleRate;
+  if (drumNoiseCache.has(key)) return drumNoiseCache.get(key);
+  const duration = type === "snare" ? 0.14 : 0.04;
+  const len = Math.floor(ctx.sampleRate * duration);
+  const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < len; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  drumNoiseCache.set(key, buffer);
+  return buffer;
+}
+
 function playDrum(type, start, level = 0.18) {
   if (!drumsEnabled || !drumToggle?.checked) return;
   const ctx = ensureAudio();
@@ -2025,14 +2058,10 @@ function playDrum(type, start, level = 0.18) {
     return;
   }
   const src = ctx.createBufferSource();
-  const len = Math.floor(ctx.sampleRate * (type === "snare" ? 0.14 : 0.04));
-  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < len; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
   const filter = ctx.createBiquadFilter();
   filter.type = type === "snare" ? "bandpass" : "highpass";
   filter.frequency.value = type === "snare" ? 1800 : 6500;
-  src.buffer = buf;
+  src.buffer = getDrumNoiseBuffer(ctx, type);
   gain.gain.setValueAtTime(type === "snare" ? 0.22 : level, start);
   gain.gain.exponentialRampToValueAtTime(0.0001, start + (type === "snare" ? 0.16 : 0.05));
   src.connect(filter).connect(gain);
@@ -2687,7 +2716,14 @@ modeButtons.addEventListener("click", (event) => {
 
 clearCustomAudioBtn?.addEventListener("click", clearCustomChordSamples);
 
-playBtn.addEventListener("click", togglePlay);
+playBtn.addEventListener("click", () => {
+  togglePlay().catch(() => {
+    isPlaying = false;
+    playBtn.disabled = false;
+    playBtn.textContent = "开始演奏";
+    setSampleStatus("当前浏览器不支持实时音频，请使用 Chrome 或 Safari");
+  });
+});
 cameraBtn.addEventListener("click", () => {
   if (cameraActive) {
     stopCamera();
@@ -3002,6 +3038,18 @@ chordSwitchDelay?.addEventListener("input", () => {
 });
 settingsFab?.addEventListener("click", () => setControlsDrawer(true));
 controlsOverlay?.addEventListener("click", () => setControlsDrawer(false));
+document.querySelector("#controlsClose")?.addEventListener("click", () => setControlsDrawer(false));
+document.querySelector(".control-tabs")?.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-control-tab]");
+  if (!tab) return;
+  const target = tab.dataset.controlTab;
+  document.querySelectorAll("[data-control-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.controlTab === target);
+  });
+  document.querySelectorAll("[data-control-page]").forEach((page) => {
+    page.classList.toggle("active", page.dataset.controlPage === target);
+  });
+});
 sixMinorBtn?.addEventListener("click", () => {
   pendingFinger = null;
   currentFinger = null;
@@ -3026,7 +3074,7 @@ if (bpm && bpmValue && initialRhythmProfile) {
   bpmValue.textContent = bpm.value;
 }
 renderChordPicker();
-syncGestureBindingsFromProgression();
+if (!localStorage.getItem(STORAGE_KEY)) syncGestureBindingsFromProgression();
 renderControls();
 applyPerformanceMode(performanceMode);
 updateStatus();
