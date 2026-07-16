@@ -190,12 +190,12 @@ const customChordSamples = new Map();
 const customFingerSamples = new Map();
 let chordSearchQuery = "";
 let warmupPromise = null;
-let chordSwitchDelayMs = 150;
+let chordSwitchDelayMs = 0;
 let switchTimerId = null;
 let drumTouchEnabled = true;
 let drumTouchInsideSince = 0;
 let drumTouchCooldownUntil = 0;
-let drumTouchSizePx = Number(localStorage.getItem("airGuitarDrumTouchSize") || 80);
+let drumTouchSizePx = Number(localStorage.getItem("airGuitarDrumTouchSize") || 128);
 
 function noteToMidi(note) {
   const match = note.match(/^([A-G][b#]?)(\d)$/);
@@ -282,9 +282,9 @@ let isPlaying = false;
 let currentFinger = null;
 let pendingFinger = null;
 let selectedKey = "C";
-let selectedInstrument = "guitar";
+let selectedInstrument = "celeste";
 let playMode = "strum";
-let selectedRhythm = "cardigan";
+let selectedRhythm = "dylan_train";
 let selectedDrumRhythm = "drum_standard";
 let capoSemitones = 0;
 let drumsEnabled = true;
@@ -2387,7 +2387,7 @@ function updateHumanizeLabel() {
 }
 
 function applyDrumTouchSize(size) {
-  drumTouchSizePx = Math.max(40, Math.min(180, Number(size) || 80));
+  drumTouchSizePx = Math.max(72, Math.min(220, Number(size) || 128));
   if (drumTouchZone) {
     drumTouchZone.style.width = drumTouchSizePx + "px";
     drumTouchZone.style.height = drumTouchSizePx + "px";
@@ -2993,6 +2993,9 @@ drumTouchSize?.addEventListener("input", () => {
   applyDrumTouchSize(drumTouchSize.value);
   localStorage.setItem("airGuitarDrumTouchSize", String(drumTouchSizePx));
 });
+drumTouchZone?.addEventListener("click", () => {
+  setDrumTouchDrumState(!drumToggle?.checked);
+});
 chordSwitchDelay?.addEventListener("input", () => {
   chordSwitchDelayMs = Number(chordSwitchDelay.value);
   if (chordSwitchDelayValue) chordSwitchDelayValue.textContent = chordSwitchDelayMs + "ms";
@@ -3016,6 +3019,12 @@ sevenDimBtn?.addEventListener("click", () => {
   chord.strings.forEach((note, index) => playSample(applyCapo(note), ensureAudio().currentTime + index * 0.016, 0.14, 1.1));
 });
 
+if (instrumentSelect) instrumentSelect.value = selectedInstrument;
+const initialRhythmProfile = getRhythmProfile();
+if (bpm && bpmValue && initialRhythmProfile) {
+  bpm.value = String(initialRhythmProfile.bpm);
+  bpmValue.textContent = bpm.value;
+}
 renderChordPicker();
 syncGestureBindingsFromProgression();
 renderControls();

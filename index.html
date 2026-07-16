@@ -40,10 +40,10 @@
         </div>
         <div class="live-gesture-palette" id="liveGesturePalette"></div>
         <div class="beat-meter" id="beatMeter"></div>
-        <div class="drum-touch-zone active" id="drumTouchZone" aria-label="手势触控鼓">🥁</div>
+        <button class="drum-touch-zone active" id="drumTouchZone" type="button" aria-label="切换鼓组">🥁<small>鼓组</small></button>
         <label class="drum-touch-size-control" aria-label="鼓触控区大小">
-          <span>鼓区</span>
-          <input id="drumTouchSize" type="range" min="40" max="180" value="80">
+          <span>鼓区大小</span>
+          <input id="drumTouchSize" type="range" min="72" max="220" value="128">
         </label>
         <div class="theme-switch" id="themeSwitch" aria-label="主题切换">
           <button type="button" data-theme-choice="light" aria-label="亮色主题">☀️</button>
@@ -140,7 +140,7 @@
         <p class="hint">输入真实和弦名，系统会反查应该摆几号国际数字手势。</p>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="rhythmPanel">
         <h2>节奏型</h2>
         <div class="rhythm-modules">
           <section class="rhythm-card">
@@ -165,14 +165,14 @@
             </div>
             <label class="stacked-label">
               和弦切换延迟
-              <input id="chordSwitchDelay" type="range" min="0" max="800" value="150" step="10">
-              <span id="chordSwitchDelayValue">150ms</span>
+              <input id="chordSwitchDelay" type="range" min="0" max="800" value="0" step="10">
+              <span id="chordSwitchDelayValue">0ms</span>
             </label>
           </section>
         </div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="playModePanel">
         <h2>演奏方式</h2>
         <div class="segmented" id="patternButtons"></div>
         <div id="customMelodySection" class="custom-melody-section">
@@ -191,11 +191,10 @@
         </div>
       </div>
 
-      <div class="panel compact binding-panel">
-        <h2>当前手势绑定</h2>
+      <div class="panel compact binding-panel" id="gestureBindingPanel">
+        <h2>五指和弦绑定</h2>
         <div id="mappingText" class="gesture-binding-list"></div>
-        <p class="hint">切换调性会重置手指绑定；手动选择后会立刻用于播放。</p>
-        <p>手在镜头里才响；只识别 1-5，减少误触发。音色会跟随当前手势和弦实时切换。</p>
+        <p class="hint">直接选择每根手指对应的和弦，修改立即生效并保存到本机。</p>
       </div>
     </aside>
   </main>
@@ -204,6 +203,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
-  <script src="./app.js?v=23"></script>
+  <script src="./app.js?v=25"></script>
 </body>
 </html>

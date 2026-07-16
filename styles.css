@@ -1097,3 +1097,19 @@ label { color:#aeb6c6; font-size:12px; gap:5px; } input,select,textarea { border
 body[data-theme="light"] { --text:#151922; --muted:#5f6878; --glass:rgba(255,255,255,.72); --glass-strong:rgba(255,255,255,.9); --stroke:rgba(18,28,45,.12); --button:#edf0f5; --button-text:#151922; background:#eef1f6; }.controls { scrollbar-color:rgba(255,255,255,.2) transparent; }
 @media (max-width: 900px) { .app { grid-template-columns:1fr; }.stage { padding:12px; }.video-wrap { height:calc(100dvh - 24px);border-radius:24px; }.controls { right:-92vw;width:min(92vw,410px);padding:18px 14px 30px; }.settings-fab { display:grid;place-items:center;right:22px;bottom:104px;width:48px;height:48px;border-radius:16px;z-index:30; }.controls-overlay { z-index:20; }.stage-nav { top:17px;left:17px;right:17px; }.gesture-badge { top:62px;left:16px; }.theme-switch { top:62px;right:16px; }.performance-hud { left:16px;bottom:16px; }.drum-touch-zone { right:16px;bottom:16px; }.live-gesture-palette { bottom:76px;width:calc(100% - 32px); }.beat-meter { bottom:145px;width:calc(100% - 32px); }.stage-nav-status { font-size:9px; }.binding-panel { display:grid; } }
 @media (max-width: 540px) { .brand-mark em,.stage-nav-status { display:none; }.gesture-badge { min-width:146px;padding:10px 12px; }.gesture-badge strong { font-size:38px; }.gesture-badge em { max-width:155px; }.live-gesture-palette button { min-height:50px;padding:5px 2px; }.live-gesture-palette strong { font-size:17px; }.live-gesture-palette span { font-size:10px; }.performance-hud { font-size:10px;max-width:calc(100% - 86px); }.controls { right:-100vw;width:100vw; }.settings-fab { bottom:93px; }.panel { border-radius:16px; }.chord-panel { display:none; } }
+
+/* V25 — controls in performance order; drum is deliberately a large top-right target. */
+.controls > header { order: 0; }
+.controls > .panel:first-of-type { order: 1; }
+#playModePanel { order: 2; }
+#gestureBindingPanel { order: 3; display: grid; }
+.chord-panel { order: 4; display: grid; }
+#rhythmPanel { order: 5; }
+.binding-panel { display: grid; }
+.drum-touch-zone { top: 128px; right: 22px; bottom: auto; width: 128px; height: 128px; padding: 0; border-radius: 26px; pointer-events: auto; display: grid; place-content: center; gap: 3px; font-size: 48px; line-height: 1; cursor: pointer; background: linear-gradient(145deg, rgba(32,39,57,.88), rgba(12,16,26,.9)); border-color: rgba(184,255,212,.42); box-shadow: 0 18px 44px rgba(0,0,0,.34), inset 0 1px rgba(255,255,255,.18); }
+.drum-touch-zone small { font-size: 10px; color: #bdebd1; letter-spacing: .14em; font-weight: 800; }
+.drum-touch-zone:hover { transform: scale(1.035); border-color: #b8ffd4; }
+.drum-touch-size-control { display: grid; top: 268px; right: 22px; width: 128px; grid-template-columns: 1fr; gap: 5px; padding: 9px 10px; border-radius: 13px; font-size: 10px; pointer-events: auto; }
+.drum-touch-size-control input { accent-color: #b8ffd4; }
+@media (max-width: 900px) { .drum-touch-zone { top: 122px; right: 16px; bottom: auto; width: 112px; height: 112px; font-size: 42px; }.drum-touch-size-control { top: 240px;right:16px;width:112px; }.chord-panel { display:grid; } }
+@media (max-width: 540px) { .drum-touch-zone { top: 116px;right:12px;width:96px;height:96px;border-radius:22px;font-size:36px; }.drum-touch-size-control { top:218px;right:12px;width:96px; }.chord-panel { display:grid; } .gesture-binding-row { grid-template-columns:50px minmax(0,1fr) 34px; gap:7px; } }
