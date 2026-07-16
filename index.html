@@ -3,22 +3,40 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vibe Air Guitar</title>
-  <link rel="stylesheet" href="./styles.css?v=23">
+  <title>Vibe Air Guitar · 手势乐器</title>
+  <meta name="theme-color" content="#090b10">
+  <link rel="stylesheet" href="./styles.css?v=24">
 </head>
 <body>
   <main class="app">
     <section class="stage">
       <div class="video-wrap fx-off">
+        <div class="stage-nav">
+          <div class="brand-mark" aria-label="Vibe Air Guitar">
+            <span class="brand-glyph">V</span><span>Vibe</span><em>Air Guitar</em>
+          </div>
+          <div class="stage-nav-status"><i></i> LIVE STUDIO</div>
+        </div>
         <video id="camera" autoplay muted playsinline></video>
-        <div class="camera-fallback" id="cameraFallback">开启摄像头，摆 1-5 号手势开弹</div>
+        <div class="camera-fallback" id="cameraFallback">
+          <div class="empty-state">
+            <span class="empty-orb">⌁</span>
+            <strong>准备好，让手势变成音乐</strong>
+            <p>开启摄像头后，比出 1–5 根手指即可切换和弦。</p>
+          </div>
+        </div>
         <canvas id="handCanvas" aria-hidden="true"></canvas>
         <canvas id="faceCanvas" aria-hidden="true"></canvas>
         <div class="effects-layer" id="effectsLayer" aria-hidden="true"></div>
         <div class="gesture-badge">
+          <span class="eyebrow">ACTIVE CHORD</span>
           <span id="gestureName">未选择手势</span>
           <strong id="activeChord">--</strong>
           <em id="detectStatus">手势识别就绪，松手即停</em>
+        </div>
+        <div class="performance-hud">
+          <span>TRACKING</span><b id="trackingModeLabel">平衡</b>
+          <span class="hud-divider"></span><span id="sampleStatus">等待演奏</span>
         </div>
         <div class="live-gesture-palette" id="liveGesturePalette"></div>
         <div class="beat-meter" id="beatMeter"></div>
@@ -42,10 +60,10 @@
         <h1>Vibe Air Guitar</h1>
       </header>
 
-      <div class="panel">
-        <div class="row">
-          <button id="cameraBtn" class="secondary">开启摄像头识别</button>
-          <button id="playBtn">开始伴奏</button>
+        <div class="panel">
+          <div class="row">
+            <button id="cameraBtn" class="secondary">开启摄像头识别</button>
+            <button id="playBtn">开始伴奏</button>
         </div>
         <div class="row single">
           <button id="autoBtn" class="secondary">松手即停</button>
@@ -73,18 +91,30 @@
           </select>
           <span id="keyLabel">C调</span>
         </label>
-        <label>
-          音色
-          <select id="instrumentSelect">
+          <label>
+            音色
+            <select id="instrumentSelect">
             <option value="guitar">吉他</option>
             <option value="electric">电吉他</option>
             <option value="piano">钢琴</option>
             <option value="tinbox">半岛铁盒</option>
             <option value="glassbell">玻璃铃</option>
-            <option value="celeste">星光琴</option>
-            <option value="violin">小提琴</option>
-          </select>
-        </label>
+              <option value="celeste">星光琴</option>
+              <option value="violin">小提琴</option>
+              <option value="musicbox">八音盒</option>
+              <option value="softpad">柔光电钢</option>
+              <option value="mallet">木槌琴</option>
+            </select>
+          </label>
+          <label class="performance-select">
+            性能模式
+            <select id="performanceSelect">
+              <option value="eco">轻量版 · 手机省电</option>
+              <option value="balanced" selected>平衡版 · 推荐</option>
+              <option value="stage">完全版 · 演出低延迟</option>
+            </select>
+            <span id="performanceHint">兼顾跟手与续航</span>
+          </label>
         <label>
           Capo
           <input id="capo" type="range" min="0" max="5" value="0">

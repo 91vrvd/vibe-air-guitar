@@ -143,6 +143,9 @@ const sampleInstruments = {
     synth: true,
     voice: "celeste",
   },
+  musicbox: { label: "八音盒", synth: true, voice: "musicbox" },
+  softpad: { label: "柔光电钢", synth: true, voice: "softpad" },
+  mallet: { label: "木槌琴", synth: true, voice: "mallet" },
   violin: {
     label: "小提琴",
     soundfont: "violin",
@@ -300,6 +303,8 @@ let handsModel = null;
 let faceModel = null;
 let faceFrameCounter = 0;
 let faceBusy = false;
+let lastInferenceAt = 0;
+let performanceMode = localStorage.getItem("airGuitarPerformanceMode") || (window.matchMedia("(max-width: 720px)").matches ? "eco" : "balanced");
 let rhythmUrl = null;
 let autoHoldEnabled = false;
 let cameraActive = false;
@@ -397,6 +402,34 @@ const chordFadeSeconds = 0.018;
 const gestureDropoutGraceMs = 120;
 const autoHoldMs = 7000;
 
+const PERFORMANCE_PROFILES = {
+  eco: { label: "轻量", hint: "手机省电，低发热", width: 480, height: 360, fps: 18, complexity: 0, detection: 0.5, tracking: 0.42, faceFx: false },
+  balanced: { label: "平衡", hint: "兼顾跟手与续航", width: 640, height: 480, fps: 24, complexity: 1, detection: 0.42, tracking: 0.34, faceFx: false },
+  stage: { label: "演出", hint: "更灵敏，耗电更高", width: 720, height: 540, fps: 30, complexity: 1, detection: 0.36, tracking: 0.3, faceFx: true },
+};
+
+function applyPerformanceMode(mode = performanceMode) {
+  performanceMode = PERFORMANCE_PROFILES[mode] ? mode : "balanced";
+  const profile = PERFORMANCE_PROFILES[performanceMode];
+  localStorage.setItem("airGuitarPerformanceMode", performanceMode);
+  if (performanceSelect) performanceSelect.value = performanceMode;
+  if (trackingModeLabel) trackingModeLabel.textContent = profile.label;
+  if (performanceHint) performanceHint.textContent = profile.hint;
+  if (handsModel) {
+    handsModel.setOptions({
+      modelComplexity: profile.complexity,
+      minDetectionConfidence: profile.detection,
+      minTrackingConfidence: profile.tracking,
+    });
+  }
+  if (performanceMode !== "stage" && stageFxEnabled) {
+    stageFxEnabled = false;
+    videoWrap?.classList.add("fx-off");
+    sparkBtn?.classList.remove("active");
+    if (sparkBtn) sparkBtn.textContent = "可爱滤镜";
+  }
+}
+
 const camera = document.querySelector("#camera");
 const videoWrap = document.querySelector(".video-wrap");
 const cameraFallback = document.querySelector("#cameraFallback");
@@ -433,6 +466,9 @@ const drumTouchZone = document.querySelector("#drumTouchZone");
 const chordSwitchDelay = document.querySelector("#chordSwitchDelay");
 const chordSwitchDelayValue = document.querySelector("#chordSwitchDelayValue");
 const drumTouchSize = document.querySelector("#drumTouchSize");
+const performanceSelect = document.querySelector("#performanceSelect");
+const trackingModeLabel = document.querySelector("#trackingModeLabel");
+const performanceHint = document.querySelector("#performanceHint");
 const settingsFab = document.querySelector("#settingsFab");
 const controlsOverlay = document.querySelector("#controlsOverlay");
 const sixMinorBtn = document.querySelector("#sixMinorBtn");
@@ -2005,12 +2041,13 @@ function playDrum(type, start, level = 0.18) {
 
 async function startCamera() {
   if (!window.Hands || !window.Camera) throw new Error("手势识别模型还没加载完成，请稍后再点一次");
+  const profile = PERFORMANCE_PROFILES[performanceMode];
   if (!handsModel) {
     handsModel = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-    handsModel.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.42, minTrackingConfidence: 0.34 });
+    handsModel.setOptions({ maxNumHands: 2, modelComplexity: profile.complexity, minDetectionConfidence: profile.detection, minTrackingConfidence: profile.tracking });
     handsModel.onResults(onHandResults);
   }
-  if (!faceModel && window.FaceDetection) {
+  if (!faceModel && window.FaceDetection && performanceMode === "stage") {
     faceModel = new FaceDetection({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}` });
     faceModel.setOptions({ model: "short", minDetectionConfidence: 0.45 });
     faceModel.onResults(drawFaceFx);
@@ -2018,6 +2055,9 @@ async function startCamera() {
   if (!handCamera) {
     handCamera = new Camera(camera, {
       onFrame: async () => {
+        const now = performance.now();
+        if (now - lastInferenceAt < 1000 / profile.fps) return;
+        lastInferenceAt = now;
         await handsModel.send({ image: camera });
         if (faceModel && stageFxEnabled && !faceBusy && faceFrameCounter++ % 5 === 0) {
           faceBusy = true;
@@ -2026,8 +2066,8 @@ async function startCamera() {
             .finally(() => { faceBusy = false; });
         }
       },
-      width: 720,
-      height: 540,
+      width: profile.width,
+      height: profile.height,
     });
   }
   await handCamera.start();
@@ -2666,6 +2706,13 @@ autoBtn?.addEventListener("click", () => {
 });
 
 sparkBtn?.addEventListener("click", () => {
+  if (performanceMode !== "stage") {
+    applyPerformanceMode("stage");
+    if (cameraActive) {
+      stopCamera();
+      startCamera().catch(() => null);
+    }
+  }
   stageFxEnabled = !stageFxEnabled;
   sparkBtn.classList.toggle("active", stageFxEnabled);
   videoWrap?.classList.toggle("fx-off", !stageFxEnabled);
@@ -2901,6 +2948,15 @@ instrumentSelect?.addEventListener("change", () => {
   });
 });
 
+performanceSelect?.addEventListener("change", () => {
+  const wasActive = cameraActive;
+  if (wasActive) stopCamera();
+  applyPerformanceMode(performanceSelect.value);
+  if (wasActive) startCamera().catch(() => {
+    detectStatus.textContent = "性能模式切换失败，请重新开启摄像头";
+  });
+});
+
 capo?.addEventListener("input", () => {
   capoSemitones = Number(capo.value);
   renderControls();
@@ -2963,6 +3019,7 @@ sevenDimBtn?.addEventListener("click", () => {
 renderChordPicker();
 syncGestureBindingsFromProgression();
 renderControls();
+applyPerformanceMode(performanceMode);
 updateStatus();
 updateThemeSwitch();
 updateHumanizeLabel();
