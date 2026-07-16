@@ -7,7 +7,7 @@
 ## ✨ 功能
 
 - 🖐️ **手势识别** — MediaPipe Hands 识别 1-5 号手势，映射到不同和弦
-- 🎵 **多种音色** — 吉他、电吉他、钢琴、小提琴、星光琴等
+- 🎵 **多种音色** — 保留尼龙吉他，并新增 University of Iowa 真实木吉他采样、电吉他、钢琴、星光琴等
 - 🥁 **鼓节奏** — 内置 20 种鼓节奏型
 - 🎸 **吉他节奏** — 20 种扫弦/分解节奏型
 - 🎶 **和弦谱编辑** — 支持自定义和弦走向，内置多种预设模板
@@ -73,3 +73,7 @@
 ## 📝 License
 
 MIT
+
+### 音频采样署名
+
+“真实木吉他”使用 [tonejs-instruments](https://github.com/nbrosowsky/tonejs-instruments) 整理的 University of Iowa Electronic Music Studios 木吉他采样。采样依据 [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) 使用；处理与整理项目代码为 MIT License。

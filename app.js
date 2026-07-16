@@ -115,9 +115,15 @@ function buildChordMap() {
 chordMap = buildChordMap();
 const sampleInstruments = {
   guitar: {
-    label: "吉他",
+    label: "尼龙吉他",
     soundfont: "acoustic_guitar_nylon",
     base: "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/acoustic_guitar_nylon-mp3",
+  },
+  steelguitar: {
+    label: "真实木吉他",
+    soundfont: "iowa_acoustic_guitar",
+    base: "https://cdn.jsdelivr.net/gh/nbrosowsky/tonejs-instruments@622c2f1c32c8cfce4158ddc3eb26e518ddef37e5/samples/guitar-acoustic",
+    toneNames: true,
   },
   electric: {
     label: "电吉他",
@@ -317,6 +323,29 @@ let customMelodyEnabled = false; // 用户自定义走向开关
 // ── 吉他标准调弦空弦音（弦号 1=高音E .. 6=低音E）──
 const OPEN_STRINGS = ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'];
 
+// 真实吉他六弦按法（低音弦 → 高音弦）。null 表示该弦不弹。
+const GUITAR_VOICINGS = {
+  C: [null, "C3", "E3", "G3", "C4", "E4"],
+  Cmaj7: [null, "C3", "E3", "G3", "B3", "E4"],
+  G: ["G2", "B2", "D3", "G3", "B3", "G4"],
+  G7: ["G2", "B2", "D3", "G3", "B3", "F4"],
+  Am: [null, "A2", "E3", "A3", "C4", "E4"],
+  Am7: [null, "A2", "E3", "G3", "C4", "E4"],
+  F: ["F2", "C3", "F3", "A3", "C4", "F4"],
+  Fmaj7: [null, "C3", "E3", "A3", "C4", "E4"],
+  Em: ["E2", "B2", "E3", "G3", "B3", "E4"],
+  Em7: ["E2", "B2", "D3", "G3", "B3", "E4"],
+  D: [null, null, "D3", "A3", "D4", "F#4"],
+  Dm: [null, null, "D3", "A3", "D4", "F4"],
+  A: [null, "A2", "E3", "A3", "C#4", "E4"],
+  E: ["E2", "B2", "E3", "G#3", "B3", "E4"],
+};
+
+function guitarVoicingForChord(chord) {
+  const name = chord?.shapeChord || chord?.token || chord?.chord || "";
+  return (GUITAR_VOICINGS[name] || chord?.strings || []).filter(Boolean);
+}
+
 // 从弦位直接取该和弦在该弦上的实际音
 // 逻辑：从空弦音往上找第一个属于和弦构成音的音
 function getStringNoteForChord(chord, stringNumber) {
@@ -438,6 +467,8 @@ const handCanvas = document.querySelector("#handCanvas");
 const faceCanvas = document.querySelector("#faceCanvas");
 const gestureName = document.querySelector("#gestureName");
 const activeChord = document.querySelector("#activeChord");
+const centerChord = document.querySelector("#centerChord");
+const centerGesture = document.querySelector("#centerGesture");
 const detectStatus = document.querySelector("#detectStatus");
 const gestureButtons = document.querySelector("#gestureButtons");
 const clearCustomAudioBtn = document.querySelector("#clearCustomAudioBtn");
@@ -660,6 +691,11 @@ function applyRecognizedChords(chords) {
   renderLyrics();
 }
 
+function normalizeKeyName(name) {
+  if (!name) return null;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 function parseScoreMeta(text) {
   const raw = String(text || "");
   const bpmMatch = raw.match(/(?:拍速|BPM|速度)\s*[:：]?\s*(\d{2,3})/i);
@@ -667,8 +703,8 @@ function parseScoreMeta(text) {
   const originalMatch = raw.match(/原唱调\s*[:：]?\s*([A-G][#b]?)/i);
   return {
     bpm: bpmMatch ? Math.max(50, Math.min(160, Number(bpmMatch[1]))) : null,
-    selectedKey: selectedMatch ? selectedMatch[1].toUpperCase() : null,
-    originalKey: originalMatch ? originalMatch[1].toUpperCase() : null,
+    selectedKey: selectedMatch ? normalizeKeyName(selectedMatch[1]) : null,
+    originalKey: originalMatch ? normalizeKeyName(originalMatch[1]) : null,
   };
 }
 
@@ -678,8 +714,8 @@ function applyScoreMeta(meta) {
     if (keySelect) keySelect.value = selectedKey;
   }
   if (meta.originalKey && noteOffsets[meta.originalKey] !== undefined && meta.selectedKey && noteOffsets[meta.selectedKey] !== undefined) {
-    capoSemitones = (noteOffsets[meta.originalKey] - noteOffsets[meta.selectedKey] + 12) % 12;
-    capoSemitones = Math.min(5, capoSemitones);
+    const detectedCapo = (noteOffsets[meta.originalKey] - noteOffsets[meta.selectedKey] + 12) % 12;
+    capoSemitones = detectedCapo <= 5 ? detectedCapo : 0;
     if (capo) capo.value = String(capoSemitones);
   }
   if (meta.bpm && bpm && bpmValue) {
@@ -951,10 +987,14 @@ function applyCapo(note) {
   return transposeNote(note, capoSemitones);
 }
 
-function sampleNoteName(note) {
+function sampleNoteName(note, instrument = selectedInstrument) {
   const match = note.match(/^([A-G][b#]?)(\d)$/);
   if (!match) return note;
   const [, name, octave] = match;
+  if (sampleInstruments[instrument]?.toneNames) {
+    const sharpName = noteNames[noteOffsets[name]] || name;
+    return `${sharpName.replace("#", "s")}${octave}`;
+  }
   return `${sharpToFlat[name] || name}${octave}`;
 }
 
@@ -977,7 +1017,7 @@ function playDecodedBuffer(buffer, start, gainValue = 0.72, duration = null) {
 async function loadSample(note, instrument = selectedInstrument) {
   const ctx = ensureAudio();
   if (sampleInstruments[instrument]?.synth) return null;
-  const sfNote = sampleNoteName(note);
+  const sfNote = sampleNoteName(note, instrument);
   const cacheKey = `${instrument}:${sfNote}`;
   if (sampleCache.has(cacheKey)) return sampleCache.get(cacheKey);
 
@@ -988,7 +1028,11 @@ async function loadSample(note, instrument = selectedInstrument) {
       if (!response.ok) throw new Error(`sample ${response.status}`);
       return response.arrayBuffer();
     })
-    .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer));
+    .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
+    .catch((error) => {
+      sampleCache.delete(cacheKey);
+      throw error;
+    });
   sampleCache.set(cacheKey, promise);
   return promise;
 }
@@ -1118,7 +1162,6 @@ function setPendingFinger(finger) {
 }
 
 function switchFingerNow(finger) {
-  const ctx = ensureAudio();
   currentFinger = finger;
   pendingFinger = finger;
   lastConfirmedFinger = finger;
@@ -1126,6 +1169,10 @@ function switchFingerNow(finger) {
   stopChordLoop();
   const chord = getChordForFinger(finger);
   if (!chord) return;
+  // 连续伴奏中的和弦切换只更新和弦，不重置全局节拍相位。
+  // 已进入 look-ahead 队列的最多 120ms 音频自然收尾，新和弦从下一格接入。
+  if (isPlaying) return;
+  const ctx = ensureAudio();
   const profile = getRhythmProfile();
   const division = scoreTrack.enabled && scoreTrack.events.length ? 16 : (profile.division || 8);
   const stepDuration = (60 / Number(bpm.value)) / (division / 4);
@@ -1153,9 +1200,6 @@ function switchFingerNow(finger) {
   } else if (playMode === "custom") {
     scheduleCustomMelody(chord, hitTime, stepIndex, stepDuration);
   }
-  // 即时击发已经占用当前步，下一次调度从后一拍开始，避免 4ms 内重复叠音。
-  stepIndex += 1;
-  nextStepTime = hitTime + stepDuration;
 }
 
 function applyPendingFinger() {
@@ -1170,6 +1214,8 @@ function updateStatus() {
   const chord = getChordForFinger(currentFinger || pendingFinger);
   gestureName.textContent = currentFinger ? `${currentFinger} 级手势` : pendingFinger ? `${pendingFinger} 级待切换` : "无手势";
   activeChord.textContent = chord?.chord || "--";
+  if (centerChord) centerChord.textContent = chord?.chord || "--";
+  if (centerGesture) centerGesture.textContent = currentFinger ? currentFinger + " 号手势" : pendingFinger ? pendingFinger + " 号待切换" : "等待手势";
   document.querySelectorAll("[data-finger]").forEach((button) => {
     button.classList.toggle("active", Number(button.dataset.finger) === (currentFinger || pendingFinger));
   });
@@ -1286,7 +1332,10 @@ function scheduleAudio() {
         if (stepIndex % (division === 16 ? 4 : 2) === 0) burstStageFx(chord.chord);
       }
     }
-    if (drumsEnabled) scheduleDrums(nextStepTime, stepIndex, profile);
+    // 乐谱使用十六分音符网格，鼓仍按八分音符推进，避免鼓点翻倍。
+    if (drumsEnabled && (division !== 16 || stepIndex % 2 === 0)) {
+      scheduleDrums(nextStepTime, division === 16 ? stepIndex / 2 : stepIndex);
+    }
     scheduleBeatVisual(stepIndex, nextStepTime, ctx);
 
     stepIndex += 1;
@@ -1338,7 +1387,7 @@ function playSample(note, start, gainValue = 0.22, duration = 1.7, playbackRateO
       source.buffer = buffer;
       source.playbackRate.value = playbackRateOffset;
       filter.type = "lowpass";
-      filter.frequency.setValueAtTime(selectedInstrument === "electric" ? 3000 : selectedInstrument === "guitar" ? 5200 : 7600, t);
+      filter.frequency.setValueAtTime(selectedInstrument === "electric" ? 3000 : selectedInstrument === "guitar" ? 5200 : selectedInstrument === "steelguitar" ? 6400 : 7600, t);
       filter.Q.setValueAtTime(selectedInstrument === "electric" ? 0.35 : 0.1, t);
       const velocity = randomVelocity ? (0.9 + Math.random() * 0.12) : 1;
       gain.gain.setValueAtTime(0.0001, t);
@@ -1747,20 +1796,24 @@ function scheduleStrum(chord, start, step) {
   }
   if (playChordStrum(chord, start, "strum")) return;
 
-  const strings = stroke === "D" ? chord.strings : [...chord.strings].reverse();
-  const gap = spreadEnabled ? (stroke === "D" ? 0.022 : 0.016) : 0.002;
+  const voicedStrings = guitarVoicingForChord(chord);
+  // 上扫通常只擦过高音 3–4 根弦，给人声留出低频空间。
+  const strings = stroke === "D" ? voicedStrings : voicedStrings.slice(-4).reverse();
+  const gap = spreadEnabled ? (stroke === "D" ? 0.019 : 0.015) : 0.002;
+  const strokeGain = randomVelocity ? 0.94 + Math.random() * 0.1 : 1;
+  const strokeOffset = randomVelocity ? (Math.random() - 0.5) * 0.006 : 0;
   strings.forEach((note, index) => {
-    const stringGain = selectedInstrument === "piano" ? 0.18 : selectedInstrument === "electric" ? 0.13 + index * 0.009 : 0.15 + index * 0.012;
-    const duration = selectedInstrument === "piano" ? 2.3 : selectedInstrument === "electric" ? 1.75 : 1.55;
-    const feel = humanizeStep(step + index, stringGain);
-    const noteStart = start + (index * gap) + feel.timeOffset * 0.45;
+    const stringGain = selectedInstrument === "piano" ? 0.18 : selectedInstrument === "electric" ? 0.13 + index * 0.009 : 0.145 + index * 0.01;
+    const duration = selectedInstrument === "piano" ? 2.3 : selectedInstrument === "electric" ? 1.75 : selectedInstrument === "steelguitar" ? 1.9 : 1.55;
+    const microGain = randomVelocity ? 0.96 + Math.random() * 0.08 : 1;
+    const noteStart = start + strokeOffset + (index * gap) + (randomVelocity ? (Math.random() - 0.5) * 0.002 : 0);
     const playedNote = applyCapo(note);
-    playLayeredNote(playedNote, noteStart, feel.gain, duration);
-    if (randomVelocity && (selectedInstrument === "guitar" || selectedInstrument === "electric")) {
-      const cents = selectedInstrument === "electric" ? 4 + Math.random() * 3 : 3 + Math.random() * 5;
+    playLayeredNote(playedNote, noteStart, stringGain * strokeGain * microGain, duration);
+    if (randomVelocity && selectedInstrument === "electric") {
+      const cents = 4 + Math.random() * 3;
       const detuneRatio = 2 ** (cents / 1200);
       const layerDelay = 0.003 + Math.random() * 0.005;
-      playSample(playedNote, noteStart + layerDelay, stringGain * 0.24, duration * 0.92, detuneRatio);
+      playSample(playedNote, noteStart + layerDelay, stringGain * 0.22, duration * 0.92, detuneRatio);
     }
   });
 }
@@ -1877,6 +1930,14 @@ function scheduleMute(start) {
 function scheduleDrums(start, step) {
   if (!drumsEnabled || !drumToggle?.checked) return;
   const profile = getDrumRhythmProfile();
+  const guitarProfile = getRhythmProfile();
+  if (guitarProfile.pattern.length === 6) {
+    const waltzSlot = step % 6;
+    if (waltzSlot === 0) playDrum("kick", start, 0.16);
+    if ([2, 4].includes(waltzSlot)) playDrum("snare", start, 0.1);
+    if ([0, 2, 4].includes(waltzSlot)) playDrum("hat", start + 0.005, waltzSlot === 0 ? 0.055 : 0.038);
+    return;
+  }
   const slot = step % 8;
   const bar = Math.floor(step / 8);
   const sixteenth = (60 / Number(bpm.value)) / 4;
@@ -2050,7 +2111,7 @@ function playDrum(type, start, level = 0.18) {
     osc.type = "sine";
     osc.frequency.setValueAtTime(120, start);
     osc.frequency.exponentialRampToValueAtTime(45, start + 0.11);
-    gain.gain.setValueAtTime(0.24, start);
+    gain.gain.setValueAtTime(Math.max(0.02, level), start);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
     osc.connect(gain);
     osc.start(start);
@@ -2062,7 +2123,7 @@ function playDrum(type, start, level = 0.18) {
   filter.type = type === "snare" ? "bandpass" : "highpass";
   filter.frequency.value = type === "snare" ? 1800 : 6500;
   src.buffer = getDrumNoiseBuffer(ctx, type);
-  gain.gain.setValueAtTime(type === "snare" ? 0.22 : level, start);
+  gain.gain.setValueAtTime(Math.max(0.015, level), start);
   gain.gain.exponentialRampToValueAtTime(0.0001, start + (type === "snare" ? 0.16 : 0.05));
   src.connect(filter).connect(gain);
   src.start(start);
@@ -2101,6 +2162,7 @@ async function startCamera() {
   }
   await handCamera.start();
   cameraActive = true;
+  videoWrap?.classList.add("camera-on");
   cameraBtn.classList.add("active");
   cameraBtn.textContent = "关闭摄像头";
   cameraFallback.classList.add("hidden");
@@ -2119,6 +2181,7 @@ function stopCamera() {
   }
   camera.srcObject = null;
   cameraActive = false;
+  videoWrap?.classList.remove("camera-on");
   lastStableCandidate = null;
   stableSince = 0;
   currentFinger = null;
@@ -2179,6 +2242,14 @@ function setDrumTouchDrumState(enabled) {
   drumToggle.checked = enabled;
   drumsEnabled = enabled;
   drumTouchZone?.classList.toggle("active", enabled);
+  const drumLabel = drumTouchZone?.querySelector("small");
+  if (drumLabel) drumLabel.textContent = enabled ? "鼓组开启" : "鼓组关闭";
+  if (drumTouchZone) {
+    drumTouchZone.classList.remove("drum-burst");
+    void drumTouchZone.offsetWidth;
+    drumTouchZone.classList.add("drum-burst");
+    window.setTimeout(() => drumTouchZone.classList.remove("drum-burst"), 620);
+  }
 }
 
 function updateDrumTouchZone(results) {
@@ -2543,6 +2614,8 @@ function updateStatus() {
   const chord = getChordForFinger(gesture);
   gestureName.textContent = currentFinger ? currentFinger + " 号手势" : pendingFinger ? pendingFinger + " 号待切换" : "无手势";
   activeChord.textContent = chord?.chord || "--";
+  if (centerChord) centerChord.textContent = chord?.chord || "--";
+  if (centerGesture) centerGesture.textContent = currentFinger ? currentFinger + " 号手势" : pendingFinger ? pendingFinger + " 号待切换" : "等待手势";
   document.querySelectorAll("[data-finger]").forEach((node) => {
     const id = Number(node.dataset.finger);
     node.classList.toggle("active", id === gesture);
