@@ -36,15 +36,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .center-chord-display > span { text-transform:uppercase; color:#b4c4a8; font-size:10px; letter-spacing:.14em; }
 .center-chord-display strong { font-size:clamp(56px,6vw,88px); line-height:1.1; font-weight:500; letter-spacing:-.07em; }
 .center-chord-display small { font-size:10px; color:#b4c4a8; }
-.touch-instrument { position:absolute; top:18%; bottom:110px; left:41%; right:5%; min-height:135px; isolation:isolate; }
+.touch-instrument { position:absolute; top:18%; bottom:135px; left:41%; right:5%; min-height:135px; isolation:isolate; }
 .sound-hole { position:absolute; width:155px; height:155px; max-height:90%; aspect-ratio:1; border-radius:50%; top:50%; left:38%; transform:translate(-50%,-50%); background:#182119; box-shadow:0 0 0 3px #58644a,0 0 0 8px #273523,0 0 0 10px #647053, inset 0 7px 28px #0a150c; z-index:-1; opacity:.8; }
 .strings { height:100%; display:grid; grid-template-rows:repeat(6,1fr); touch-action:none; user-select:none; -webkit-user-select:none; border-left:5px solid #b1ad83; border-right:5px solid #b1ad83; padding:0 7px; border-radius:4px; }
 .strings button { position:relative; width:100%; border:0; background:transparent; padding:0; color:#c3caaa; display:flex; align-items:center; gap:10px; min-height:22px; touch-action:none; }
 .strings button span { font:10px ui-monospace,monospace; width:14px; }.strings button small { width:26px; font:10px ui-monospace,monospace; text-align:right; }
 .strings button i { flex:1; height:2px; background:linear-gradient(#ebdb9c,#7f8155); box-shadow:0 2px 3px #0a140c; pointer-events:none; }
 .strings button:nth-child(1) i { height:4px; }.strings button:nth-child(2) i { height:3px; }.strings button:nth-child(n+4) i { height:1px; }
-.strings .plucked i, .strings.strummed i { animation:vibrate .28s ease-out; background:#f2ffb7; box-shadow:0 0 16px #cee694; }
-@keyframes vibrate { 0%,40%,80% { transform:translateY(-2px); } 20%,60% { transform:translateY(2px); } 100% { transform:translateY(0); } }
+.strings .plucked i, .strings.strummed i { animation:vibrate .28s ease-out; }
+@keyframes vibrate { 0%,40%,80% { transform:translateY(-2px); box-shadow:0 0 16px #cee694; } 20%,60% { transform:translateY(2px); } 100% { transform:translateY(0); } }
 .instrument-caption { display:flex; justify-content:space-between; gap:5px; padding-top:12px; color:#9fb591; font-size:8px; letter-spacing:.06em; }
 .drum-cluster { display:none; }
 .stage-bottom { left:20px; right:20px; bottom:14px; gap:8px; }
@@ -52,6 +52,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .live-gesture-palette button { border-radius:9px; min-height:52px; background:#ffffff08; border-color:#d2e8bb24; color:#e3e9d4; }
 .live-gesture-palette button.active { color:#e4f6af; border-color:#d9ed87; background:#d9ed8719; box-shadow:none; }
 .live-gesture-palette strong { font-size:22px; font-weight:500; }.live-gesture-palette span { color:#a6b597; font-size:9px; }
+.live-gesture-palette button.active span { color:#b6cc8d; }
 .beat-meter { height:4px; display:flex; gap:5px; }.beat-meter i { flex:1; height:3px; background:#ceddac24; }.beat-meter i.active { background:#d9ed87; }
 .performance-hud { font-size:9px; color:#a6b597; min-height:14px; }.performance-hud > span:first-child, #trackingModeLabel, .performance-hud > i { display:none; }
 .camera-instructions { display:none; position:absolute; right:22px; top:24px; z-index:5; background:#102218bf; padding:12px; border-radius:10px; max-width:220px; color:#e9f4df; }
