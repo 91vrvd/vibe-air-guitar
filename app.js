@@ -196,12 +196,17 @@ const customChordSamples = new Map();
 const customFingerSamples = new Map();
 let chordSearchQuery = "";
 let warmupPromise = null;
+let playbackStarting = false;
 let chordSwitchDelayMs = 0;
 let switchTimerId = null;
 let drumTouchEnabled = true;
 let drumTouchInsideSince = 0;
 let drumTouchCooldownUntil = 0;
-let drumTouchSizePx = Number(localStorage.getItem("airGuitarDrumTouchSize") || 128);
+const preferenceStorage = {
+  getItem(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  setItem(key, value) { try { localStorage.setItem(key, value); } catch { /* Private/restricted browsing still supports playing. */ } },
+};
+let drumTouchSizePx = Number(preferenceStorage.getItem("airGuitarDrumTouchSize") || 128);
 
 function noteToMidi(note) {
   const match = note.match(/^([A-G][b#]?)(\d)$/);
@@ -239,12 +244,13 @@ async function loadRjsElectricSample(zone, velocitySlot) {
   const cacheKey = `${zone.file}_vel${slot}`;
   if (rjsElectricCache.has(cacheKey)) return rjsElectricCache.get(cacheKey);
   const ctx = ensureAudio();
-  const promise = fetch(`${RJS_ELECTRIC_BASE}/${zone.file}_vel${slot}.wav`)
+  const promise = fetchWithTimeout(`${RJS_ELECTRIC_BASE}/${zone.file}_vel${slot}.wav`)
     .then((response) => {
       if (!response.ok) throw new Error(`rjs electric ${response.status}`);
       return response.arrayBuffer();
     })
-    .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer));
+    .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
+    .catch(error => { rjsElectricCache.delete(cacheKey); throw error; });
   rjsElectricCache.set(cacheKey, promise);
   return promise;
 }
@@ -254,12 +260,13 @@ async function loadLocalGuitarSample(zone, rrSlot) {
   if (localGuitarCache.has(cacheKey)) return localGuitarCache.get(cacheKey);
   const ctx = ensureAudio();
   const url = `${LOCAL_GUITAR_BASE}/${zone.file}_RR${rrSlot}.wav`;
-  const promise = fetch(url)
+  const promise = fetchWithTimeout(url)
     .then((response) => {
       if (!response.ok) throw new Error(`local ${response.status}`);
       return response.arrayBuffer();
     })
-    .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer));
+    .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
+    .catch(error => { localGuitarCache.delete(cacheKey); throw error; });
   localGuitarCache.set(cacheKey, promise);
   return promise;
 }
@@ -272,7 +279,7 @@ async function loadChordStrumSample(chordName, kind = "strum") {
   const cacheKey = `${chordName}:${kind}`;
   if (chordStrumCache.has(cacheKey)) return chordStrumCache.get(cacheKey);
   const ctx = ensureAudio();
-  const promise = fetch(`${CHORD_STRUM_BASE}/${entry}`)
+  const promise = fetchWithTimeout(`${CHORD_STRUM_BASE}/${entry}`)
     .then((response) => {
       if (!response.ok) throw new Error(`chord strum ${response.status}`);
       return response.arrayBuffer();
@@ -288,7 +295,7 @@ let isPlaying = false;
 let currentFinger = null;
 let pendingFinger = null;
 let selectedKey = "C";
-let selectedInstrument = "celeste";
+let selectedInstrument = "guitar";
 let playMode = "strum";
 let selectedRhythm = "dylan_train";
 let selectedDrumRhythm = "drum_standard";
@@ -310,7 +317,7 @@ let faceModel = null;
 let faceFrameCounter = 0;
 let faceBusy = false;
 let lastInferenceAt = 0;
-let performanceMode = localStorage.getItem("airGuitarPerformanceMode") || (window.matchMedia("(max-width: 720px)").matches ? "eco" : "balanced");
+let performanceMode = preferenceStorage.getItem("airGuitarPerformanceMode") || (window.matchMedia("(max-width: 720px)").matches ? "eco" : "balanced");
 let rhythmUrl = null;
 let autoHoldEnabled = false;
 let cameraActive = false;
@@ -441,7 +448,7 @@ const PERFORMANCE_PROFILES = {
 function applyPerformanceMode(mode = performanceMode) {
   performanceMode = PERFORMANCE_PROFILES[mode] ? mode : "balanced";
   const profile = PERFORMANCE_PROFILES[performanceMode];
-  localStorage.setItem("airGuitarPerformanceMode", performanceMode);
+  preferenceStorage.setItem("airGuitarPerformanceMode", performanceMode);
   if (performanceSelect) performanceSelect.value = performanceMode;
   if (trackingModeLabel) trackingModeLabel.textContent = profile.label;
   if (performanceHint) performanceHint.textContent = profile.hint;
@@ -775,7 +782,7 @@ function applyRecognizedScore(text) {
 
 function loadGestureBindings() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    const saved = JSON.parse(preferenceStorage.getItem(STORAGE_KEY) || "{}");
     return Object.fromEntries(
       GESTURE_GUIDE.map((gesture) => [
         gesture.id,
@@ -788,7 +795,7 @@ function loadGestureBindings() {
 }
 
 function saveGestureBindings() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(
+  preferenceStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(
     GESTURE_GUIDE.map((gesture) => [gesture.id, gestureBindings[gesture.id]])
   )));
 }
@@ -911,7 +918,8 @@ function ensureAudio() {
     audioContext = new AudioContextClass({ latencyHint: "interactive" });
     masterGain = audioContext.createGain();
     masterGain.gain.value = 0.9;
-    masterGain.connect(audioContext.destination);
+    if (window.VibeStudio) window.VibeStudio.attachAudio(audioContext, masterGain);
+    else masterGain.connect(audioContext.destination);
   }
   return audioContext;
 }
@@ -1014,6 +1022,13 @@ function playDecodedBuffer(buffer, start, gainValue = 0.72, duration = null) {
   source.stop(t + playDuration + 0.18);
 }
 
+async function fetchWithTimeout(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try { return await fetch(url, { signal: controller.signal }); }
+  finally { clearTimeout(timer); }
+}
+
 async function loadSample(note, instrument = selectedInstrument) {
   const ctx = ensureAudio();
   if (sampleInstruments[instrument]?.synth) return null;
@@ -1023,7 +1038,7 @@ async function loadSample(note, instrument = selectedInstrument) {
 
   const source = sampleInstruments[instrument];
   const url = `${source.base}/${sfNote}.mp3`;
-  const promise = fetch(url)
+  const promise = fetchWithTimeout(url)
     .then((response) => {
       if (!response.ok) throw new Error(`sample ${response.status}`);
       return response.arrayBuffer();
@@ -1223,6 +1238,9 @@ function updateStatus() {
 }
 
 async function togglePlay() {
+  if (playbackStarting) return;
+  playbackStarting = true;
+  try {
   const ctx = ensureAudio();
   if (ctx.state === "suspended") {
     setSampleStatus("正在开启音频...");
@@ -1230,18 +1248,8 @@ async function togglePlay() {
   }
 
   if (!isPlaying) {
-    playBtn.disabled = true;
-    playBtn.textContent = "采样加载中...";
-    setSampleStatus("采样加载中...");
-    try {
-      warmupPromise ||= warmupSamples();
-      await warmupPromise;
-    } catch {
-      setSampleStatus("采样失败/兜底");
-    } finally {
-      warmupPromise = null;
-      playBtn.disabled = false;
-    }
+    // A slow sample host must never block the transport. A plucked synth bridges loading.
+    warmupPromise ||= warmupSamples().catch(() => setSampleStatus("采样未就绪 · 使用合成拨弦")).finally(() => { warmupPromise = null; });
     isPlaying = true;
     stepIndex = 0;
     nextStepTime = ctx.currentTime + 0.05;
@@ -1259,6 +1267,8 @@ async function togglePlay() {
     playBtn.textContent = "开始演奏";
     updateStatus();
   }
+  window.VibeStudio?.transportChanged(isPlaying);
+  } finally { playbackStarting = false; }
 }
 
 function fadeMaster(start, duration) {
@@ -1316,10 +1326,14 @@ function scheduleAudio() {
     applyPendingFinger();
     renderLyrics();
 
-    if (currentFinger) {
-      const chord = getChordForFinger(currentFinger);
+    const sequenceChord = window.VibeStudio?.scheduledStep(stepIndex, division, nextStepTime);
+    if (currentFinger || sequenceChord) {
+      const chord = sequenceChord || getChordForFinger(currentFinger);
       if (chord) {
-        const customFinger = customFingerSamples.get(currentFinger);
+        const customFinger = sequenceChord ? null : customFingerSamples.get(currentFinger);
+        if (window.VibeStudio?.manualCamera()) {
+          // In two-hand mode only a real strum triggers guitar notes; drums keep time.
+        } else {
         if (customFinger) {
           if (stepIndex % division === 0) playDecodedBuffer(customFinger.buffer, nextStepTime, 0.72);
         } else if (scoreTrack.enabled && scoreTrack.events.length) scheduleScoreStep(chord, nextStepTime, stepIndex, stepDuration); 
@@ -1330,6 +1344,7 @@ function scheduleAudio() {
           scheduleCustomMelody(chord, nextStepTime, stepIndex, stepDuration);
         }
         if (stepIndex % (division === 16 ? 4 : 2) === 0) burstStageFx(chord.chord);
+        }
       }
     }
     // 乐谱使用十六分音符网格，鼓仍按八分音符推进，避免鼓点翻倍。
@@ -1376,6 +1391,13 @@ function playSample(note, start, gainValue = 0.22, duration = 1.7, playbackRateO
     return;
   }
 
+  // Give the first gesture an immediate voice while local/remote samples load.
+  if (!window.VibeStudio?.samplesReady(selectedInstrument)) {
+    playPluck(note, start, gainValue, duration);
+    window.VibeStudio?.warmSamples();
+    return;
+  }
+
   const playSoundfont = () => {
     loadSample(note).then((buffer) => {
       const now = ctx.currentTime;
@@ -1417,7 +1439,8 @@ function playSample(note, start, gainValue = 0.22, duration = 1.7, playbackRateO
     if (selectedInstrument === "electric") {
       const midi = noteToMidi(note);
       const zone = findRjsElectricZone(midi);
-      const velocitySlot = Math.max(1, Math.min(7, Math.round((gainValue / 0.24) * 5) + (randomVelocity ? Math.floor(Math.random() * 2) : 0)));
+      // One medium-velocity layer avoids a 154 MB mobile preload; gain still follows touch dynamics.
+      const velocitySlot = 4;
       loadRjsElectricSample(zone, velocitySlot).then((buffer) => {
         const now = ctx.currentTime;
         if (start < now - 0.08) return;
@@ -2130,15 +2153,16 @@ function playDrum(type, start, level = 0.18) {
 }
 
 async function startCamera() {
-  if (!window.Hands || !window.Camera) throw new Error("手势识别模型还没加载完成，请稍后再点一次");
+  await window.VibeStudio?.loadCamera();
+  if (!window.Hands || !window.Camera) throw new Error("手势模型加载失败，请检查网络后重试");
   const profile = PERFORMANCE_PROFILES[performanceMode];
   if (!handsModel) {
-    handsModel = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    handsModel = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}` });
     handsModel.setOptions({ maxNumHands: 2, modelComplexity: profile.complexity, minDetectionConfidence: profile.detection, minTrackingConfidence: profile.tracking });
     handsModel.onResults(onHandResults);
   }
   if (!faceModel && window.FaceDetection && performanceMode === "stage") {
-    faceModel = new FaceDetection({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}` });
+    faceModel = new FaceDetection({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4.1646425229/${file}` });
     faceModel.setOptions({ model: "short", minDetectionConfidence: 0.45 });
     faceModel.onResults(drawFaceFx);
   }
@@ -2148,7 +2172,13 @@ async function startCamera() {
         const now = performance.now();
         if (now - lastInferenceAt < 1000 / profile.fps) return;
         lastInferenceAt = now;
-        await handsModel.send({ image: camera });
+        try { await handsModel.send({ image: camera }); }
+        catch {
+          stopCamera();
+          handsModel?.close?.(); handsModel = null;
+          window.VibeStudio?.notify("手势模型运行失败，请检查网络后重试；仍可使用触控琴弦。");
+          return;
+        }
         if (faceModel && stageFxEnabled && !faceBusy && faceFrameCounter++ % 5 === 0) {
           faceBusy = true;
           faceModel.send({ image: camera })
@@ -2162,6 +2192,7 @@ async function startCamera() {
   }
   await handCamera.start();
   cameraActive = true;
+  window.VibeStudio?.cameraChanged(true);
   videoWrap?.classList.add("camera-on");
   cameraBtn.classList.add("active");
   cameraBtn.textContent = "关闭摄像头";
@@ -2180,7 +2211,9 @@ function stopCamera() {
     stream.getTracks().forEach((track) => track.stop());
   }
   camera.srcObject = null;
+  handCamera = null;
   cameraActive = false;
+  window.VibeStudio?.cameraChanged(false);
   videoWrap?.classList.remove("camera-on");
   lastStableCandidate = null;
   stableSince = 0;
@@ -2200,6 +2233,7 @@ function stopCamera() {
 
 function onHandResults(results) {
   drawHand(results);
+  if (window.VibeStudio?.handleHands(results)) return;
   updateDrumTouchZone(results);
   const landmarks = results.multiHandLandmarks?.[0];
   const candidate = landmarks ? countExtendedFingers(landmarks) : null;
@@ -2293,6 +2327,7 @@ function drawHand(results) {
   canvasCtx.save();
   canvasCtx.lineCap = "round";
   canvasCtx.lineJoin = "round";
+  const frame = cameraFrameRect(handCanvas.width, handCanvas.height);
   const chains = [
     [0, 1, 2, 3, 4],
     [0, 5, 6, 7, 8],
@@ -2308,8 +2343,8 @@ function drawHand(results) {
       canvasCtx.beginPath();
       chain.forEach((idx, pointIndex) => {
         const point = landmarks[idx];
-        const x = point.x * handCanvas.width;
-        const y = point.y * handCanvas.height;
+        const x = frame.x + point.x * frame.width;
+        const y = frame.y + point.y * frame.height;
         if (pointIndex === 0) canvasCtx.moveTo(x, y);
         else canvasCtx.lineTo(x, y);
       });
@@ -2318,11 +2353,17 @@ function drawHand(results) {
     canvasCtx.fillStyle = "rgba(255,209,102,0.9)";
     landmarks.forEach((point) => {
       canvasCtx.beginPath();
-      canvasCtx.arc(point.x * handCanvas.width, point.y * handCanvas.height, 3.2, 0, Math.PI * 2);
+      canvasCtx.arc(frame.x + point.x * frame.width, frame.y + point.y * frame.height, 3.2, 0, Math.PI * 2);
       canvasCtx.fill();
     });
   });
   canvasCtx.restore();
+}
+
+function cameraFrameRect(width, height) {
+  const sourceWidth = camera.videoWidth || 640, sourceHeight = camera.videoHeight || 480;
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  return { x: (width - sourceWidth * scale) / 2, y: (height - sourceHeight * scale) / 2, width: sourceWidth * scale, height: sourceHeight * scale };
 }
 
 function drawFaceFx(results) {
@@ -2337,10 +2378,11 @@ function drawFaceFx(results) {
   const box = detection?.locationData?.relativeBoundingBox;
   if (!box) return;
 
-  const x = box.xMin * faceCanvas.width;
-  const y = box.yMin * faceCanvas.height;
-  const w = box.width * faceCanvas.width;
-  const h = box.height * faceCanvas.height;
+  const frame = cameraFrameRect(faceCanvas.width, faceCanvas.height);
+  const x = frame.x + box.xMin * frame.width;
+  const y = frame.y + box.yMin * frame.height;
+  const w = box.width * frame.width;
+  const h = box.height * frame.height;
   const cx = x + w / 2;
   const cy = y + h / 2;
   const t = performance.now() / 1000;
@@ -2497,6 +2539,7 @@ function applyDrumTouchSize(size) {
 
 function setControlsDrawer(open) {
   document.body.classList.toggle("controls-open", open);
+  window.VibeStudio?.drawerChanged(open);
 }
 
 function chordSelectOptions(currentChord) {
@@ -2551,6 +2594,7 @@ async function warmupSamples() {
     ...Object.values(gestureBindings).flatMap((chord) => getChordByName(chord).strings),
     ...activeProgression.flatMap((item) => item.chord.strings),
   ].map(applyCapo))];
+  if (window.VibeStudio) return window.VibeStudio.warmSamples();
   if (selectedInstrument === "guitar") {
     setSampleStatus("加载本地尼龙吉他采样...");
     try {
@@ -2623,6 +2667,7 @@ function updateStatus() {
   renderProgression();
   renderLiveGesturePalette();
   if (typeof window.renderCustomProgression === "function") window.renderCustomProgression();
+  window.VibeStudio?.statusChanged();
 }
 
 function renderLiveGesturePalette() {
@@ -2663,31 +2708,7 @@ function burstStageFx(chordName) {
 }
 
 function classifyGesture(points) {
-  const wrist = points[0];
-  const palm = points[9];
-  const scale = Math.max(0.05, distance(wrist, palm));
-  const open = (tip, pip, mcp) => {
-    const tipFar = distance(points[tip], wrist) > distance(points[pip], wrist) + scale * 0.1;
-    const awayFromPalm = distance(points[tip], palm) > distance(points[mcp], palm) + scale * 0.18;
-    const aboveJoint = points[tip].y < points[pip].y - scale * 0.1;
-    return (tipFar && awayFromPalm) || aboveJoint;
-  };
-
-  const index = open(8, 6, 5);
-  const middle = open(12, 10, 9);
-  const ring = open(16, 14, 13);
-  const pinky = open(20, 18, 17);
-  const thumb = isThumbOpen(points) || distance(points[4], points[17]) > scale * 1.2;
-
-  if (index && !middle && !ring && !pinky) return 1;
-  if (index && middle && !ring && !pinky) return 2;
-  if (index && middle && ring && !pinky) return 3;
-  if (index && middle && ring && pinky) return thumb ? 5 : 4;
-
-  const noThumbCount = [index, middle, ring, pinky].filter(Boolean).length;
-  if (noThumbCount >= 1 && noThumbCount <= 4) return noThumbCount;
-  if (thumb && noThumbCount === 4) return 5;
-  return null;
+  return StudioCore.fingerCount(points);
 }
 
 function distance(a, b) {
@@ -2703,6 +2724,7 @@ function renderLyrics() {
 }
 
 function triggerManualFinger(finger) {
+  if (window.VibeStudio) { window.VibeStudio.chooseFinger(finger).catch(() => window.VibeStudio.notify("音频未开启，请再点一次和弦并检查浏览器音量。")); return; }
   setPendingFinger(finger);
   if (!isPlaying) {
     const ctx = ensureAudio();
@@ -2759,15 +2781,13 @@ async function handleChordUpload(input) {
 
 function clearCustomChordSamples() {
   customChordSamples.clear();
+  customFingerSamples.clear();
   chordStrumCache.clear();
-  gestureBindings = defaultBindingsForKey(selectedKey);
-  saveGestureBindings();
   stopChordLoop();
   document.querySelectorAll("[data-chord-upload]").forEach((input) => {
     input.value = "";
   });
-  refreshProgressionForKey();
-  if (sampleStatus) setSampleStatus("已清除上传音频和所有手势绑定");
+  if (sampleStatus) setSampleStatus("已清除上传音频 · 和弦绑定保留");
   renderControls();
   updateStatus();
 }
@@ -2797,15 +2817,20 @@ playBtn.addEventListener("click", () => {
     setSampleStatus("当前浏览器不支持实时音频，请使用 Chrome 或 Safari");
   });
 });
-cameraBtn.addEventListener("click", () => {
+cameraBtn.addEventListener("click", async () => {
   if (cameraActive) {
     stopCamera();
     return;
   }
-  startCamera().catch(() => {
-    cameraFallback.textContent = "摄像头或模型未就绪，继续使用模拟手势";
-    detectStatus.textContent = "识别启动失败，可刷新或稍后再试";
-  });
+  cameraBtn.disabled = true;
+  cameraBtn.textContent = "加载手势模型…";
+  try { await ensureAudio().resume(); await startCamera(); }
+  catch (error) {
+    stopCamera();
+    const message = error.name === "NotAllowedError" ? "摄像头权限未开启，仍可触控演奏。请在浏览器地址栏允许摄像头后重试。" : "摄像头或手势模型未就绪，请检查设备及网络后重试。触控演奏不受影响。";
+    detectStatus.textContent = message;
+    window.VibeStudio?.notify(message);
+  } finally { cameraBtn.disabled = false; }
 });
 
 autoBtn?.addEventListener("click", () => {
@@ -2825,7 +2850,7 @@ sparkBtn?.addEventListener("click", () => {
   stageFxEnabled = !stageFxEnabled;
   sparkBtn.classList.toggle("active", stageFxEnabled);
   videoWrap?.classList.toggle("fx-off", !stageFxEnabled);
-  sparkBtn.textContent = stageFxEnabled ? "可爱滤镜" : "关闭滤镜";
+  sparkBtn.textContent = stageFxEnabled ? "关闭舞台特效" : "舞台特效";
 });
 
 themeSwitch?.addEventListener("click", (event) => {
@@ -3100,7 +3125,7 @@ drumTouchToggle?.addEventListener("change", () => {
 });
 drumTouchSize?.addEventListener("input", () => {
   applyDrumTouchSize(drumTouchSize.value);
-  localStorage.setItem("airGuitarDrumTouchSize", String(drumTouchSizePx));
+  preferenceStorage.setItem("airGuitarDrumTouchSize", String(drumTouchSizePx));
 });
 drumTouchZone?.addEventListener("click", () => {
   setDrumTouchDrumState(!drumToggle?.checked);
@@ -3147,7 +3172,7 @@ if (bpm && bpmValue && initialRhythmProfile) {
   bpmValue.textContent = bpm.value;
 }
 renderChordPicker();
-if (!localStorage.getItem(STORAGE_KEY)) syncGestureBindingsFromProgression();
+if (!preferenceStorage.getItem(STORAGE_KEY)) syncGestureBindingsFromProgression();
 renderControls();
 applyPerformanceMode(performanceMode);
 updateStatus();
