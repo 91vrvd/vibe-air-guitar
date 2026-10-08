@@ -7,56 +7,14 @@ window.runEngineSmoke = async () => {
   const ctx = ensureAudio(); await ctx.resume();
   const probe = ctx.createAnalyser(); probe.fftSize = 2048; masterGain.connect(probe);
   const samples = new Float32Array(probe.fftSize);
-  let maximum = 0, firstOnsetAt = null;
-  const sample = setInterval(() => {
-    probe.getFloatTimeDomainData(samples);
-    for (let i = 0; i < samples.length; i++) maximum = Math.max(maximum, Math.abs(samples[i]));
-    if (maximum > .001 && firstOnsetAt === null) firstOnsetAt = performance.now();
-  }, 10);
+  let maximum = 0;
+  const sample = setInterval(() => { probe.getFloatTimeDomainData(samples); maximum = Math.max(maximum, ...samples.map(Math.abs)); }, 10);
   try {
-    const firstActionAt = performance.now();
     await VibeStudio.chooseFinger(2); await wait(150);
     check($('centerChord').textContent === 'G', '和弦垫选择 G');
     check(maximum > .001, '首次点击有真实非静音输出，peak=' + maximum.toFixed(4));
-    check(firstOnsetAt - firstActionAt < 180, '首弹本机出声延迟低于 180ms，实测=' + Math.round(firstOnsetAt - firstActionAt) + 'ms');
-    const makeHand = (count, offset = 0) => {
-      const points = Array.from({ length: 21 }, () => ({ x: .5, y: .75 + offset }));
-      points[0] = { x: .5, y: .9 + offset };
-      for (let finger = 0; finger < 4; finger++) {
-        const index = 5 + finger * 4, x = .36 + finger * .09;
-        points[index] = { x, y: .65 + offset };
-        points[index + 1] = { x, y: .5 + offset };
-        points[index + 2] = { x, y: (finger < count ? .4 : .62) + offset };
-        points[index + 3] = { x, y: (finger < count ? .3 : .72) + offset };
-      }
-      points[4] = count === 5 ? { x: .12, y: .6 + offset } : { x: .43, y: .66 + offset };
-      return points;
-    };
-    $('gestureMode').value = 'single';
-    $('gestureMode').dispatchEvent(new Event('change', { bubbles: true }));
-    VibeStudio.handleHands({ multiHandLandmarks: [makeHand(2)] });
-    await wait(90);
-    VibeStudio.handleHands({ multiHandLandmarks: [makeHand(2)] });
-    check(currentFinger === 2, '单手伸指选和弦');
-    $('strings').classList.remove('strummed');
-    VibeStudio.handleHands({ multiHandLandmarks: [makeHand(2, .1)] });
-    await wait(30);
-    check($('strings').classList.contains('strummed'), '同一只手挥动即可扫弦，无需伴奏或第二只手');
     await VibeStudio.warmSamples();
     check(VibeStudio.samplesReady('guitar'), '本地吉他采样加载成功');
-    check(localGuitarBuffers.size >= 5, '尼龙吉他优先采样已解码');
-    for (const instrument of ['steelguitar', 'electric']) {
-      instrumentSelect.value = instrument;
-      instrumentSelect.dispatchEvent(new Event('change', { bubbles: true }));
-      await VibeStudio.warmSamples();
-      const bank = realGuitarBank(instrument);
-      check(bank.buffers.size >= 4, sampleInstruments[instrument].label + '本地采样已解码');
-      maximum = 0;
-      await VibeStudio.chooseFinger(1); await wait(150);
-      check(maximum > .001, sampleInstruments[instrument].label + '实测非静音输出');
-    }
-    instrumentSelect.value = 'guitar';
-    instrumentSelect.dispatchEvent(new Event('change', { bubbles: true }));
     $('recordBtn').click(); await wait(100);
     check($('recordBtn').textContent.includes('结束'), '录音启动，无麦克风');
     $('sequenceBtn').click(); await wait(300);
@@ -89,12 +47,8 @@ window.runEngineSmoke = async () => {
     };
     await importFile({ ...session, bpm: 130, volume: 60 });
     check(Number(bpm.value) === 130 && $('masterVolume').value === '60', '配置文件导入应用节奏和音量');
-    await importFile({ ...session, instrument: 'celeste' });
-    check(instrumentSelect.value === 'guitar' && Number(bpm.value) === 118, '旧实验音色配置安全迁移到尼龙吉他');
-    await importFile({ ...session, gestureMode: 'strum', gestureControlVersion: undefined });
-    check($('gestureMode').value === 'single', '旧双手默认配置迁移到单手演奏');
     await importFile({ ...session, bpm: 9999 });
-    check(Number(bpm.value) === 118 && $('studioMessage').textContent.includes('未导入'), '非法配置被拒绝且保留当前配置');
+    check(Number(bpm.value) === 130 && $('studioMessage').textContent.includes('未导入'), '非法配置被拒绝且保留当前配置');
     await importFile({ ...session, bpm: 102 });
     return lines.join('\n');
   } finally { clearInterval(sample); masterGain.disconnect(probe); $('panicBtn').click(); }
@@ -103,7 +57,7 @@ window.runEngineSmoke = async () => {
 window.runModelSmoke = async () => {
   await VibeStudio.loadCamera();
   const model = new Hands({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}` });
-  model.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: .5, minTrackingConfidence: .5 });
+  model.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: .5, minTrackingConfidence: .5 });
   const image = document.createElement('canvas'); image.width = 320; image.height = 240;
   let received = false;
   model.onResults(results => { if (results.multiHandLandmarks?.length) throw new Error('空白画面误检'); received = true; });

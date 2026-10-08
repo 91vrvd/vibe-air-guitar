@@ -42,15 +42,6 @@ test('sweep uses travel, velocity, cooldown and reacquisition guard', () => {
   d.update(null, 340); assert.equal(d.update(.8, 400), null);
   assert.equal(d.update(.1, 1000), null);
 });
-test('single-hand sweep uses a shorter travel without repeated false hits', () => {
-  const d = new StrumDetector({ travel: .065, minVelocity: .2, cooldownMs: 110 });
-  assert.equal(d.update(.35, 0), null);
-  assert.equal(d.update(.42, 40).direction, 'down');
-  assert.equal(d.update(.50, 80), null);
-  assert.equal(d.update(.40, 170).direction, 'up');
-  d.update(null, 190);
-  assert.equal(d.update(.8, 210), null);
-});
 test('tap tempo requires three taps, ignores outliers, respects limits', () => {
   assert.equal(tappedTempo([0, 500]), null);
   assert.equal(tappedTempo([0, 500, 1000, 1510]), 120);

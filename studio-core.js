@@ -25,10 +25,7 @@
     }
   }
   class StrumDetector {
-    constructor({ travel = .09, minVelocity = .25, cooldownMs = 140 } = {}) {
-      this.travel = travel; this.minVelocity = minVelocity; this.cooldownMs = cooldownMs;
-      this.reset();
-    }
+    constructor() { this.reset(); }
     reset() { this.previous = null; this.lastHit = -Infinity; this.anchor = null; this.direction = 0; }
     update(y, time) {
       if (!Number.isFinite(y)) { this.reset(); return null; }
@@ -38,7 +35,7 @@
       const dy = y - prev.y, direction = Math.sign(dy), velocity = Math.abs(dy) / Math.max(1, time - prev.time) * 1000;
       if (Math.abs(dy) < .003) return null;
       if (direction !== this.direction) { this.anchor = prev.y; this.direction = direction; }
-      if (Math.abs(y - this.anchor) < this.travel || velocity < this.minVelocity || time - this.lastHit < this.cooldownMs) return null;
+      if (Math.abs(y - this.anchor) < .09 || velocity < .25 || time - this.lastHit < 140) return null;
       this.lastHit = time; this.anchor = y;
       return { direction: direction > 0 ? 'down' : 'up', velocity: clamp(velocity / 2, .35, 1) };
     }
