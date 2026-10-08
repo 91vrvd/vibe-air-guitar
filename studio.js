@@ -5,11 +5,14 @@
   const core = window.StudioCore;
   const storageKey = 'vibe.studio.session.v1';
   const ready = new Set(), loading = new Map(), retryAfter = new Map();
-  const stable = new core.StableGesture(100), sweep = new core.StrumDetector();
+  const stable = new core.StableGesture(70), sweep = new core.StrumDetector();
+  const singleSweep = new core.StrumDetector({ travel: .065, minVelocity: .2, cooldownMs: 110 });
   let output, analyser, capture, meterFrame, recorder, recordStarted = 0, recordTimer, recordingStarting = false;
   let sequence = false, sequenceIndex = -1, practice = false, practiceIndex = 0, practiceCount = 0, practiceLocked = false;
   let clickOn = false, clickNext = 0, clickBeat = 0, tapTimes = [], lastStrumTime = 0;
   let lastHandAt = 0, audioStarting = null, savingTimer, importing = false, cameraLoading;
+  let strumFrame = 0;
+  const pluckFrames = new WeakMap();
   const takeUrls = new Set();
   const currentChord = () => sequence && isPlaying && activeProgression.length
     ? activeProgression[Math.max(0, sequenceIndex) % activeProgression.length].chord
@@ -20,7 +23,7 @@
   async function audioReady() {
     const ctx = ensureAudio();
     if (ctx.state !== 'running') await ctx.resume();
-    warmSamples();
+    if (!samplesReady(selectedInstrument) && !loading.has(selectedInstrument)) warmSamples();
     return ctx;
   }
 
@@ -34,13 +37,18 @@
     master.connect(output).connect(limiter);
     limiter.connect(ctx.destination); limiter.connect(capture); limiter.connect(analyser);
     const data = new Uint8Array(analyser.fftSize);
-    const meter = () => {
-      analyser.getByteTimeDomainData(data);
-      const peak = Math.max(...data.map(n => Math.abs(n - 128))) / 128;
-      $('outputLevel').style.transform = `scaleX(${Math.min(1, peak * 2)})`;
+    let lastMeterAt = 0;
+    const meter = (now) => {
       meterFrame = requestAnimationFrame(meter);
+      if (now - lastMeterAt < 40) return;
+      lastMeterAt = now;
+      analyser.getByteTimeDomainData(data);
+      let peak = 0;
+      for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i] - 128));
+      peak /= 128;
+      $('outputLevel').style.transform = `scaleX(${Math.min(1, peak * 2)})`;
     };
-    meter();
+    meterFrame = requestAnimationFrame(meter);
   }
 
   function samplesReady(instrument) { return Boolean(sampleInstruments[instrument]?.synth) || ready.has(instrument); }
@@ -53,11 +61,14 @@
     const task = (async () => {
       try {
         if (instrument === 'guitar') {
-          await Promise.all(LOCAL_GUITAR_ZONES.flatMap(zone => [1, 2].map(rr => loadLocalGuitarSample(zone, rr))));
+          // Only the default C chord's nearest zones are critical. Other notes load on demand.
+          await Promise.all([2, 3, 4, 6, 7].map(index => loadLocalGuitarSample(LOCAL_GUITAR_ZONES[index], 1)));
           localGuitarReady = true;
         } else if (instrument === 'electric') {
-          await Promise.all(RJS_ELECTRIC_ZONES.map(zone => loadRjsElectricSample(zone, 4)));
+          await Promise.all([0, 2, 5, 7].map(index => loadRjsElectricSample(RJS_ELECTRIC_ZONES[index], 4)));
           rjsElectricReady = true;
+        } else if (instrument === 'steelguitar') {
+          await Promise.all([0, 2, 3, 4, 6].map(index => loadSteelGuitarSample(STEEL_GUITAR_ZONES[index])));
         } else {
           const notes = [...new Set(Object.values(gestureBindings).flatMap(name => guitarVoicingForChord(getChordByName(name))).map(applyCapo))];
           await Promise.all(notes.map(note => loadSample(note, instrument)));
@@ -92,9 +103,10 @@
     if (direction === 'up') notes.reverse();
     const gain = mutedStrum ? .055 : .16 * core.clamp(velocity, .2, 1);
     notes.forEach((note, index) => playSample(applyCapo(note), ctx.currentTime + .006 + index * (spreadEnabled ? .014 : .003), gain, mutedStrum ? .14 : 1.4));
-    $('strings').classList.remove('strummed');
-    void $('strings').offsetWidth;
-    $('strings').classList.add('strummed');
+    const strings = $('strings');
+    strings.classList.remove('strummed');
+    if (strumFrame) cancelAnimationFrame(strumFrame);
+    strumFrame = requestAnimationFrame(() => { strings.classList.add('strummed'); strumFrame = 0; });
     lastStrumTime = performance.now();
     checkPractice(chord);
   }
@@ -107,7 +119,10 @@
     const ctx = await audioReady(), note = stringNote(index);
     if (note) playSample(applyCapo(note), ctx.currentTime + .006, .2, mutedStrum ? .15 : 1.2);
     const button = $('strings').children[index];
-    button.classList.remove('plucked'); void button.offsetWidth; button.classList.add('plucked');
+    button.classList.remove('plucked');
+    const previousFrame = pluckFrames.get(button);
+    if (previousFrame) cancelAnimationFrame(previousFrame);
+    pluckFrames.set(button, requestAnimationFrame(() => { button.classList.add('plucked'); pluckFrames.delete(button); }));
     checkPractice(currentChord());
   }
   $('strings').innerHTML = Array.from({ length: 6 }, (_, i) => `<button type="button" data-string="${i}" aria-label="拨动第 ${6 - i} 弦"><span>${6 - i}</span><i></i><small></small></button>`).join('');
@@ -266,20 +281,37 @@
     document.body.classList.toggle('camera-active', on);
     $('cameraMode').classList.toggle('active', on); $('touchMode').classList.toggle('active', !on);
     $('cameraInstructions').hidden = !on;
-    $('inputHint').textContent = on ? '双手入镜 · 好光线让识别更稳定' : '选一个和弦，划过琴弦。';
-    stable.reset(); sweep.reset(); lastHandAt = 0;
+    $('inputHint').textContent = on ? '单手比 1–5 指选和弦，上下挥动扫弦' : '选一个和弦，划过琴弦。';
+    stable.reset(); sweep.reset(); singleSweep.reset(); lastHandAt = 0;
+    syncGestureInstructions();
     if (!on) $('detectStatus').textContent = '触控已就绪';
   }
-  const manualCamera = () => cameraActive && $('gestureMode').value === 'strum' && !sequence;
+  const manualCamera = () => cameraActive && ['single', 'strum'].includes($('gestureMode').value) && !sequence;
+  function syncGestureInstructions() {
+    const mode = $('gestureMode').value;
+    const title = $('cameraInstructions').querySelector('strong');
+    const detail = $('cameraInstructions').querySelector('span');
+    if (mode === 'single') {
+      title.textContent = '只需一只手';
+      detail.innerHTML = '伸出 1–5 指选和弦<br>同一只手上下挥动扫弦';
+    } else if (mode === 'strum') {
+      title.textContent = '让双手完整入镜';
+      detail.innerHTML = '一手伸指选和弦<br>另一只手上下挥动扫弦';
+    } else {
+      title.textContent = '一只手选和弦';
+      detail.innerHTML = '伸出 1–5 指选和弦<br>开启伴奏后自动弹奏';
+    }
+  }
   function handleHands(results) {
     const hands = results.multiHandLandmarks || [], time = performance.now();
-    const twoHand = $('gestureMode').value === 'strum';
+    const mode = $('gestureMode').value;
+    const twoHand = mode === 'strum';
     const leftSide = $('chordSide').value === 'left';
     // Coordinates are camera-space; the on-screen video is mirrored.
     const chordHand = twoHand ? hands.find(p => leftSide ? p[0].x > .5 : p[0].x <= .5) : hands[0];
     const strumHand = twoHand ? hands.find(p => leftSide ? p[0].x <= .5 : p[0].x > .5) : null;
     const count = chordHand ? core.fingerCount(chordHand) : null;
-    stable.delay = 100 + chordSwitchDelayMs;
+    stable.delay = (mode === 'single' ? 70 : 100) + chordSwitchDelayMs;
     const confirmed = stable.update(count, time);
     if (count) lastHandAt = time;
     if (confirmed && confirmed !== currentFinger) { selectFinger(confirmed); }
@@ -287,16 +319,26 @@
     if (!count && !holding && (chordHand || time - lastHandAt > 250)) {
       if (currentFinger) { currentFinger = pendingFinger = null; stopChordLoop(); updateStatus(); }
     }
+    if (mode === 'single') {
+      // The same hand selects a chord with finger count and plays it with a palm sweep.
+      // Ignore movement during a gesture change so the old chord cannot sound by accident.
+      const hit = singleSweep.update(count && confirmed === count && currentFinger === count ? chordHand[9].y : null, time);
+      if (hit) strum(hit.direction, hit.velocity).catch(audioError);
+    } else singleSweep.reset();
     if (twoHand) {
       const hit = sweep.update(strumHand && count && confirmed ? strumHand[9].y : null, time);
       if (hit && currentFinger) strum(hit.direction, hit.velocity).catch(audioError);
     }
-    $('detectStatus').textContent = holding ? '自动保持和弦 · 最长 7 秒' : !chordHand ? '请让选和弦的手入镜' : !count ? '握拳 · 已静音' : !confirmed ? '保持手势…' : `${confirmed} 指 · ${twoHand ? strumHand ? '上下挥动另一只手扫弦' : '等待扫弦手入镜' : '开启伴奏即可连续演奏'}`;
+    $('detectStatus').textContent = holding ? '自动保持和弦 · 最长 7 秒' : !chordHand ? '请让演奏手入镜' : !count ? '握拳 · 已静音' : !confirmed ? '保持手势…' : `${confirmed} 指 · ${mode === 'single' ? '上下挥动这只手扫弦' : twoHand ? strumHand ? '上下挥动另一只手扫弦' : '等待扫弦手入镜' : '开启伴奏即可连续演奏'}`;
     return true;
   }
   $('cameraMode').addEventListener('click', () => { if (!cameraActive && !cameraBtn.disabled) cameraBtn.click(); });
   $('touchMode').addEventListener('click', () => { if (cameraActive) stopCamera(); });
-  $('gestureMode').addEventListener('change', () => { stable.reset(); sweep.reset(); notify($('gestureMode').value === 'strum' ? '双手扫弦：选和弦的手握拳即可停止。' : '单手模式：选好和弦后开启伴奏。'); });
+  $('gestureMode').addEventListener('change', () => {
+    stable.reset(); sweep.reset(); singleSweep.reset(); syncGestureInstructions();
+    handsModel?.setOptions({ maxNumHands: $('gestureMode').value === 'strum' ? 2 : 1 });
+    notify($('gestureMode').value === 'single' ? '单手演奏：伸指选和弦，同一只手上下挥动扫弦。' : $('gestureMode').value === 'strum' ? '双手扫弦：一手选和弦，另一手扫弦。' : '单手伴奏：伸指选和弦后开启伴奏。');
+  });
 
   async function toggleRecording() {
     if (recordingStarting) return;
@@ -354,20 +396,26 @@
 
   function configOptions() {
     return { chords: CHORD_OPTIONS, enums: {
-      instrument: Object.keys(sampleInstruments), key: Array.from(keySelect.options, o => o.value),
+      instrument: Array.from(instrumentSelect.options, o => o.value), key: Array.from(keySelect.options, o => o.value),
       rhythm: rhythmProfiles.map(r => r.id), drumRhythm: drumRhythmProfiles.map(r => r.id), mode: Object.keys(modeLabels),
-      gestureMode: ['strum', 'chords'], chordSide: ['left', 'right'], theme: ['dark', 'light'], performance: Object.keys(PERFORMANCE_PROFILES),
+      gestureMode: ['single', 'strum', 'chords'], chordSide: ['left', 'right'], theme: ['dark', 'light'], performance: Object.keys(PERFORMANCE_PROFILES),
     } };
   }
   function snapshot() {
     return { version: 1, instrument: selectedInstrument, key: selectedKey, rhythm: selectedRhythm, drumRhythm: selectedDrumRhythm, mode: playMode,
-      gestureMode: $('gestureMode').value, chordSide: $('chordSide').value, theme: glassTheme, performance: performanceMode,
+      gestureMode: $('gestureMode').value, gestureControlVersion: 2, chordSide: $('chordSide').value, theme: glassTheme, performance: performanceMode,
       bpm: Number(bpm.value), capo: capoSemitones, volume: Number($('masterVolume').value), progression: getProgressionTokens(), bindings: { ...gestureBindings },
       drums: drumsEnabled, metronome: clickOn, spread: spreadEnabled, humanize: randomVelocity, muted: mutedStrum };
   }
   function saveSoon() { if (importing) return; clearTimeout(savingTimer); savingTimer = setTimeout(() => safeStorage.set(JSON.stringify(snapshot())), 400); }
   function restore(data) {
-    const s = core.validateSession(data, configOptions());
+    const supported = Array.from(instrumentSelect.options, o => o.value);
+    const migrated = data ? { ...data } : data;
+    if (migrated && !supported.includes(migrated.instrument) && Object.prototype.hasOwnProperty.call(sampleInstruments, migrated.instrument)) migrated.instrument = 'guitar';
+    // Existing sessions used two-hand as the only manual gesture mode. New sessions
+    // remember an explicit two-hand choice; legacy ones open with the requested one-hand flow.
+    if (migrated?.gestureMode === 'strum' && !migrated.gestureControlVersion) migrated.gestureMode = 'single';
+    const s = core.validateSession(migrated, configOptions());
     importing = true;
     try {
       selectedInstrument = instrumentSelect.value = s.instrument; selectedKey = keySelect.value = s.key;
@@ -375,7 +423,7 @@
       gestureBindings = s.bindings; saveGestureBindings(); progressionInput.value = s.progression.join(' ');
       bpm.value = s.bpm; capoSemitones = s.capo; capo.value = s.capo;
       $('masterVolume').value = s.volume; applyVolume();
-      $('gestureMode').value = s.gestureMode; $('chordSide').value = s.chordSide;
+      $('gestureMode').value = s.gestureMode; $('chordSide').value = s.chordSide; syncGestureInstructions();
       glassTheme = s.theme; document.body.dataset.theme = s.theme; updateThemeSwitch(); applyPerformanceMode(s.performance);
       drumsEnabled = drumToggle.checked = s.drums; spreadEnabled = spreadToggle.checked = s.spread;
       randomVelocity = randomToggle.checked = s.humanize; mutedStrum = muteToggle.checked = s.muted;
@@ -394,7 +442,7 @@
     const file = event.target.files?.[0]; if (!file) return;
     try {
       if (file.size > 32000) throw new Error('配置文件过大');
-      const data = core.validateSession(JSON.parse(await file.text()), configOptions());
+      const data = JSON.parse(await file.text());
       panic(); setSequence(false); if (practice) stopPractice(); restore(data); saveSoon(); warmSamples(); notify('演奏配置已导入。');
     } catch (error) { notify('未导入：' + error.message); }
     finally { event.target.value = ''; }

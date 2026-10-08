@@ -5,7 +5,7 @@
 <script>
 document.querySelector('#app').onload = () => {
  const app=document.querySelector('#app').contentDocument;
- const script=app.createElement('script');script.src='./_tests/engine-smoke.js';app.body.append(script);
+ const script=app.createElement('script');script.src='./_tests/engine-smoke.js?v=34';app.body.append(script);
 };
 document.querySelector('#run').onclick = async () => {
  const result=document.querySelector('#result');result.textContent='运行中…';

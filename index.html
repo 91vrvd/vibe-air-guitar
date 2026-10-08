@@ -7,7 +7,10 @@
   <meta name="description" content="用手势、触屏或键盘弹奏吉他。在浏览器里扫弦、练习和弦、录下自己的音乐。无需登录，摄像头画面只在本机处理。">
   <title>Vibe Air Guitar · 随手，成曲</title>
   <link rel="stylesheet" href="./styles.css?v=32">
-  <link rel="stylesheet" href="./studio.css?v=32.1">
+  <link rel="stylesheet" href="./studio.css?v=34">
+  <link rel="preload" as="fetch" href="./samples/optimized/nylon/MG_NylonGuitar_C%232_RR1.mp3" crossorigin>
+  <link rel="preload" as="fetch" href="./samples/optimized/nylon/MG_NylonGuitar_E2_RR1.mp3" crossorigin>
+  <link rel="preload" as="fetch" href="./samples/optimized/nylon/MG_NylonGuitar_G2_RR1.mp3" crossorigin>
 </head>
 <body>
   <main class="app-shell">
@@ -27,7 +30,6 @@
         </div>
       </header>
 
-      <div class="workspace-heading"><div><span class="eyebrow">YOUR EVERYDAY MUSIC SPACE</span><h1>随手，成曲<span>。</span></h1></div><span class="local-label">本机演奏 · 无需登录</span></div>
       <div class="mode-toolbar"><div class="input-modes" aria-label="输入方式"><button id="touchMode" type="button" class="active">触控 / 键盘</button><button id="cameraMode" type="button">摄像头手势</button></div><span id="inputHint">选一个和弦，划过琴弦。</span></div>
       <div class="video-wrap fx-off">
         <video id="camera" autoplay muted playsinline></video>
@@ -58,7 +60,7 @@
           <div class="strings" id="strings"></div>
           <div class="instrument-caption"><span>6 STRINGS / NYLON & MORE</span><span>拖动扫弦 · 点按拨弦</span></div>
         </div>
-        <div class="camera-instructions" id="cameraInstructions"><strong>让双手完整入镜</strong><span>画面左侧：伸出 1–5 指选和弦<br>画面右侧：上下挥动扫弦</span></div>
+        <div class="camera-instructions" id="cameraInstructions"><strong>只需一只手</strong><span>伸出 1–5 指选和弦<br>同一只手上下挥动扫弦</span></div>
 
         <div class="drum-cluster">
           <button class="drum-touch-zone active" id="drumTouchZone" type="button" aria-label="切换鼓组">
@@ -112,11 +114,7 @@
           <div class="panel compact-grid">
             <label><span>音色</span>
               <select id="instrumentSelect">
-                <option value="guitar">尼龙吉他</option><option value="steelguitar">真实木吉他</option><option value="electric">电吉他</option>
-                <option value="piano">钢琴</option><option value="tinbox">半岛铁盒</option>
-                <option value="glassbell">玻璃铃</option><option value="celeste">星光琴</option>
-                <option value="violin">小提琴</option><option value="musicbox">八音盒</option>
-                <option value="softpad">柔光电钢</option><option value="mallet">木槌琴</option>
+                <option value="guitar">尼龙吉他</option><option value="steelguitar">真实木吉他</option><option value="electric">清音电吉他</option>
               </select>
             </label>
             <label><span>调性</span>
@@ -174,7 +172,7 @@
         </section>
 
         <section class="control-page" data-control-page="settings">
-          <div class="panel"><div class="section-heading"><span>手势演奏</span><small>画面仅在本机处理</small></div><label><span>演奏模式</span><select id="gestureMode"><option value="strum">双手扫弦</option><option value="chords">单手选和弦 + 自动伴奏</option></select></label><label><span>选和弦的手（镜像画面）</span><select id="chordSide"><option value="left">画面左侧</option><option value="right">画面右侧</option></select></label><p class="hint">双手模式：一手选和弦，另一手上下扫弦。握拳停止发音。单手模式请同时开启伴奏。</p></div>
+          <div class="panel"><div class="section-heading"><span>手势演奏</span><small>画面仅在本机处理</small></div><label><span>演奏模式</span><select id="gestureMode"><option value="single" selected>单手演奏 · 选和弦并扫弦</option><option value="strum">双手扫弦</option><option value="chords">单手选和弦 + 自动伴奏</option></select></label><label><span>选和弦的手（镜像画面）</span><select id="chordSide"><option value="left">画面左侧</option><option value="right">画面右侧</option></select></label><p class="hint">默认只用一只手：伸指选和弦，整只手上下挥动扫弦。握拳停止。双手模式和自动伴奏仍可切换。</p></div>
           <div class="panel">
             <div class="section-heading"><span>设备性能</span><small id="performanceHint">兼顾跟手与续航</small></div>
             <select id="performanceSelect">
@@ -208,9 +206,9 @@
     </aside>
   </main>
 
-  <dialog id="guideDialog"><form method="dialog"><button class="dialog-close" aria-label="关闭说明">×</button></form><span class="eyebrow">FIRST SESSION</span><h2>30 秒，弹出第一段旋律。</h2><ol><li><strong>选和弦</strong><p>点击舞台底部的和弦，或按键盘 1–5。</p></li><li><strong>拨动琴弦</strong><p>点按单根弦、上下滑动扫弦，或按 ↑ / ↓。点“伴奏”就能听到连续节奏。</p></li><li><strong>试试双手</strong><p>开启摄像头，在光线充足的地方让双手入镜。一手伸出 1–5 指，另一手上下挥动。可在设置里交换左右。</p></li><li><strong>留下一段音乐</strong><p>录音只记录应用声音，不访问麦克风。停止后到控制台下载。耳机能减少外放延迟感。</p></li></ol><p class="hint">手势模型与部分音色需要联网。加载失败仍可用触控演奏。移动端请取消静音并调高媒体音量。</p></dialog>
-  <script src="./studio-core.js?v=32"></script>
-  <script src="./app.js?v=32"></script>
-  <script src="./studio.js?v=32"></script>
+  <dialog id="guideDialog"><form method="dialog"><button class="dialog-close" aria-label="关闭说明">×</button></form><span class="eyebrow">FIRST SESSION</span><h2>30 秒，弹出第一段旋律。</h2><ol><li><strong>单手选和弦</strong><p>开启摄像头，伸出 1–5 指选择和弦，握拳停止。</p></li><li><strong>同一只手扫弦</strong><p>保持手指姿势，把整只手上下挥动即可出声，不必打开自动伴奏。</p></li><li><strong>也能触控演奏</strong><p>点按单根弦、上下滑动扫弦，或按 ↑ / ↓。可切换双手模式与自动伴奏。</p></li><li><strong>留下一段音乐</strong><p>录音只记录应用声音，不访问麦克风。停止后到控制台下载。耳机能减少外放延迟感。</p></li></ol><p class="hint">手势模型首次需要联网。加载失败仍可用触控演奏。移动端请取消静音并调高媒体音量。</p></dialog>
+  <script src="./studio-core.js?v=34"></script>
+  <script src="./app.js?v=34"></script>
+  <script src="./studio.js?v=34"></script>
 </body>
 </html>

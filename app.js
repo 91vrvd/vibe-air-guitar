@@ -161,7 +161,7 @@ const sampleInstruments = {
 const sharpToFlat = { "C#": "Db", "D#": "Eb", "F#": "Gb", "G#": "Ab", "A#": "Bb" };
 
 // MG Soft Nylon Guitar (Lite) - Pianobook, DecentSampler 解析得到的 zone 映射
-const LOCAL_GUITAR_BASE = "samples/mg-nylon";
+const LOCAL_GUITAR_BASE = "samples/optimized/nylon";
 const LOCAL_GUITAR_ZONES = [
   { rootNote: 40, loNote: 38, hiNote: 40, file: "MG_NylonGuitar_E1" },
   { rootNote: 43, loNote: 41, hiNote: 43, file: "MG_NylonGuitar_G1" },
@@ -173,10 +173,10 @@ const LOCAL_GUITAR_ZONES = [
   { rootNote: 64, loNote: 62, hiNote: 64, file: "MG_NylonGuitar_E3" },
   { rootNote: 67, loNote: 65, hiNote: 67, file: "MG_NylonGuitar_G3" },
 ];
-let rrIndex = 0;
 let localGuitarReady = false;
 const localGuitarCache = new Map();
-const RJS_ELECTRIC_BASE = "samples/rjs-electric";
+const localGuitarBuffers = new Map();
+const RJS_ELECTRIC_BASE = "samples/optimized/electric";
 const RJS_ELECTRIC_ZONES = [
   { rootNote: 40, loNote: 38, hiNote: 41, file: "E2" },
   { rootNote: 43, loNote: 42, hiNote: 44, file: "G2" },
@@ -189,6 +189,17 @@ const RJS_ELECTRIC_ZONES = [
 ];
 let rjsElectricReady = false;
 const rjsElectricCache = new Map();
+const rjsElectricBuffers = new Map();
+const STEEL_GUITAR_BASE = "samples/optimized/steel";
+const STEEL_GUITAR_ZONES = [
+  { rootNote: 40, file: "E2" }, { rootNote: 45, file: "A2" },
+  { rootNote: 48, file: "C3" }, { rootNote: 52, file: "E3" },
+  { rootNote: 55, file: "G3" }, { rootNote: 59, file: "B3" },
+  { rootNote: 62, file: "D4" }, { rootNote: 65, file: "F4" },
+  { rootNote: 69, file: "A4" },
+];
+const steelGuitarCache = new Map();
+const steelGuitarBuffers = new Map();
 const CHORD_STRUM_BASE = "samples/chord-strums";
 const CHORD_STRUM_FILES = {};
 const chordStrumCache = new Map();
@@ -240,34 +251,51 @@ function findRjsElectricZone(midi) {
 }
 
 async function loadRjsElectricSample(zone, velocitySlot) {
-  const slot = Math.max(1, Math.min(7, velocitySlot));
-  const cacheKey = `${zone.file}_vel${slot}`;
+  const cacheKey = `${zone.file}_vel4`;
   if (rjsElectricCache.has(cacheKey)) return rjsElectricCache.get(cacheKey);
   const ctx = ensureAudio();
-  const promise = fetchWithTimeout(`${RJS_ELECTRIC_BASE}/${zone.file}_vel${slot}.wav`)
+  const promise = fetchWithTimeout(`${RJS_ELECTRIC_BASE}/${cacheKey}.mp3`)
     .then((response) => {
       if (!response.ok) throw new Error(`rjs electric ${response.status}`);
       return response.arrayBuffer();
     })
     .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
+    .then((buffer) => { rjsElectricBuffers.set(cacheKey, buffer); return buffer; })
     .catch(error => { rjsElectricCache.delete(cacheKey); throw error; });
   rjsElectricCache.set(cacheKey, promise);
   return promise;
 }
 
 async function loadLocalGuitarSample(zone, rrSlot) {
-  const cacheKey = `${zone.file}_RR${rrSlot}`;
+  const cacheKey = `${zone.file}_RR1`;
   if (localGuitarCache.has(cacheKey)) return localGuitarCache.get(cacheKey);
   const ctx = ensureAudio();
-  const url = `${LOCAL_GUITAR_BASE}/${zone.file}_RR${rrSlot}.wav`;
+  const url = `${LOCAL_GUITAR_BASE}/${cacheKey}.mp3`;
   const promise = fetchWithTimeout(url)
     .then((response) => {
       if (!response.ok) throw new Error(`local ${response.status}`);
       return response.arrayBuffer();
     })
     .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
+    .then((buffer) => { localGuitarBuffers.set(cacheKey, buffer); return buffer; })
     .catch(error => { localGuitarCache.delete(cacheKey); throw error; });
   localGuitarCache.set(cacheKey, promise);
+  return promise;
+}
+
+function nearestZone(zones, midi) {
+  return zones.reduce((best, zone) => Math.abs(zone.rootNote - midi) < Math.abs(best.rootNote - midi) ? zone : best, zones[0]);
+}
+
+async function loadSteelGuitarSample(zone) {
+  if (steelGuitarCache.has(zone.file)) return steelGuitarCache.get(zone.file);
+  const ctx = ensureAudio();
+  const promise = fetchWithTimeout(`${STEEL_GUITAR_BASE}/${zone.file}.mp3`)
+    .then(response => { if (!response.ok) throw new Error(`steel ${response.status}`); return response.arrayBuffer(); })
+    .then(data => ctx.decodeAudioData(data))
+    .then(buffer => { steelGuitarBuffers.set(zone.file, buffer); return buffer; })
+    .catch(error => { steelGuitarCache.delete(zone.file); throw error; });
+  steelGuitarCache.set(zone.file, promise);
   return promise;
 }
 
@@ -440,8 +468,8 @@ const gestureDropoutGraceMs = 120;
 const autoHoldMs = 7000;
 
 const PERFORMANCE_PROFILES = {
-  eco: { label: "轻量", hint: "手机省电，低发热", width: 480, height: 360, fps: 18, complexity: 0, detection: 0.5, tracking: 0.42, faceFx: false },
-  balanced: { label: "平衡", hint: "兼顾跟手与续航", width: 640, height: 480, fps: 24, complexity: 1, detection: 0.42, tracking: 0.34, faceFx: false },
+  eco: { label: "轻量", hint: "单手优先，手机省电", width: 480, height: 360, fps: 24, complexity: 0, detection: 0.44, tracking: 0.36, faceFx: false },
+  balanced: { label: "平衡", hint: "优先跟手，兼顾续航", width: 640, height: 480, fps: 30, complexity: 0, detection: 0.42, tracking: 0.34, faceFx: false },
   stage: { label: "演出", hint: "更灵敏，耗电更高", width: 720, height: 540, fps: 30, complexity: 1, detection: 0.36, tracking: 0.3, faceFx: true },
 };
 
@@ -454,6 +482,7 @@ function applyPerformanceMode(mode = performanceMode) {
   if (performanceHint) performanceHint.textContent = profile.hint;
   if (handsModel) {
     handsModel.setOptions({
+      maxNumHands: document.querySelector('#gestureMode')?.value === 'strum' ? 2 : 1,
       modelComplexity: profile.complexity,
       minDetectionConfidence: profile.detection,
       minTrackingConfidence: profile.tracking,
@@ -1383,123 +1412,72 @@ function isTinboxFamilyInstrument() {
   return Boolean(sampleInstruments[selectedInstrument]?.synth);
 }
 
+function realGuitarBank(instrument) {
+  if (instrument === "guitar") return {
+    zones: LOCAL_GUITAR_ZONES, buffers: localGuitarBuffers,
+    key: zone => `${zone.file}_RR1`, load: zone => loadLocalGuitarSample(zone, 1),
+    zone: findLocalZone,
+  };
+  if (instrument === "electric") return {
+    zones: RJS_ELECTRIC_ZONES, buffers: rjsElectricBuffers,
+    key: zone => `${zone.file}_vel4`, load: zone => loadRjsElectricSample(zone, 4),
+    zone: findRjsElectricZone,
+  };
+  if (instrument === "steelguitar") return {
+    zones: STEEL_GUITAR_ZONES, buffers: steelGuitarBuffers,
+    key: zone => zone.file, load: loadSteelGuitarSample,
+    zone: midi => nearestZone(STEEL_GUITAR_ZONES, midi),
+  };
+  return null;
+}
+
 function playSample(note, start, gainValue = 0.22, duration = 1.7, playbackRateOffset = 1) {
   const ctx = ensureAudio();
-
   if (sampleInstruments[selectedInstrument]?.synth) {
     playTinbox(note, start, gainValue, duration, currentSynthVoice());
     return;
   }
-
-  // Give the first gesture an immediate voice while local/remote samples load.
-  if (!window.VibeStudio?.samplesReady(selectedInstrument)) {
+  const bank = realGuitarBank(selectedInstrument);
+  if (!bank) {
     playPluck(note, start, gainValue, duration);
-    window.VibeStudio?.warmSamples();
-    return;
-  }
-
-  const playSoundfont = () => {
-    loadSample(note).then((buffer) => {
-      const now = ctx.currentTime;
-      if (start < now - 0.08) return;
-      const source = ctx.createBufferSource();
-      const gain = ctx.createGain();
-      const filter = ctx.createBiquadFilter();
-      const t = Math.max(start, now);
-      source.buffer = buffer;
-      source.playbackRate.value = playbackRateOffset;
-      filter.type = "lowpass";
-      filter.frequency.setValueAtTime(selectedInstrument === "electric" ? 3000 : selectedInstrument === "guitar" ? 5200 : selectedInstrument === "steelguitar" ? 6400 : 7600, t);
-      filter.Q.setValueAtTime(selectedInstrument === "electric" ? 0.35 : 0.1, t);
-      const velocity = randomVelocity ? (0.9 + Math.random() * 0.12) : 1;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(gainValue * velocity * (selectedInstrument === "electric" ? 0.76 : 1), t + 0.012);
-      gain.gain.setTargetAtTime(0.0001, t + duration * (selectedInstrument === "electric" ? 0.58 : 0.52), duration * 0.2);
-      if (selectedInstrument === "electric") {
-        const warmth = ctx.createBiquadFilter();
-        const soften = ctx.createBiquadFilter();
-        warmth.type = "lowshelf";
-        warmth.frequency.setValueAtTime(360, t);
-        warmth.gain.setValueAtTime(2.5, t);
-        soften.type = "highshelf";
-        soften.frequency.setValueAtTime(2600, t);
-        soften.gain.setValueAtTime(-5, t);
-        source.connect(filter).connect(warmth).connect(soften).connect(gain).connect(masterGain);
-      } else {
-        source.connect(filter).connect(gain).connect(masterGain);
-      }
-      source.start(t);
-      source.stop(t + duration + 0.4);
-    }).catch(() => {
-      playPluck(note, start, gainValue, duration);
-    });
-  };
-
-  if (selectedInstrument !== "guitar") {
-    if (selectedInstrument === "electric") {
-      const midi = noteToMidi(note);
-      const zone = findRjsElectricZone(midi);
-      // One medium-velocity layer avoids a 154 MB mobile preload; gain still follows touch dynamics.
-      const velocitySlot = 4;
-      loadRjsElectricSample(zone, velocitySlot).then((buffer) => {
-        const now = ctx.currentTime;
-        if (start < now - 0.08) return;
-        const source = ctx.createBufferSource();
-        const gain = ctx.createGain();
-        const filter = ctx.createBiquadFilter();
-        const warmth = ctx.createBiquadFilter();
-        const t = Math.max(start, now);
-        source.buffer = buffer;
-        source.playbackRate.value = Math.pow(2, (midi - zone.rootNote) / 12) * playbackRateOffset;
-        filter.type = "lowpass";
-        filter.frequency.setValueAtTime(3800, t);
-        filter.Q.setValueAtTime(0.25, t);
-        warmth.type = "lowshelf";
-        warmth.frequency.setValueAtTime(320, t);
-        warmth.gain.setValueAtTime(1.8, t);
-        const velocity = randomVelocity ? (0.88 + Math.random() * 0.14) : 1;
-        gain.gain.setValueAtTime(0.0001, t);
-        gain.gain.exponentialRampToValueAtTime(gainValue * 0.95 * velocity, t + 0.01);
-        gain.gain.setTargetAtTime(0.0001, t + duration * 0.62, duration * 0.22);
-        source.connect(filter).connect(warmth).connect(gain).connect(masterGain);
-        source.start(t);
-        source.stop(t + duration + 0.8);
-        if (!rjsElectricReady) {
-          rjsElectricReady = true;
-          if (sampleStatus) setSampleStatus("RJS 电吉他采样");
-        }
-      }).catch(() => playSoundfont());
-      return;
-    }
-    playSoundfont();
     return;
   }
 
   const midi = noteToMidi(note);
-  const zone = findLocalZone(midi);
-  const rrSlot = (rrIndex++ % 2) + 1;
-  loadLocalGuitarSample(zone, rrSlot).then((buffer) => {
-    const now = ctx.currentTime;
-    if (start < now - 0.08) return;
-    const source = ctx.createBufferSource();
-    const gain = ctx.createGain();
-    source.buffer = buffer;
-    source.playbackRate.value = Math.pow(2, (midi - zone.rootNote) / 12) * playbackRateOffset;
-    const t = Math.max(start, now);
-    const velocity = randomVelocity ? (0.86 + Math.random() * 0.16) : 1;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(gainValue * velocity, t + 0.008);
-    gain.gain.setTargetAtTime(0.0001, t + duration * 0.55, duration * 0.2);
-    source.connect(gain).connect(masterGain);
-    source.start(t);
-    source.stop(t + duration + 0.4);
-    if (!localGuitarReady) {
-      localGuitarReady = true;
-      if (sampleStatus) setSampleStatus("本地尼龙吉他采样");
-    }
-  }).catch(() => {
-    playSoundfont();
+  const wantedZone = bank.zone(midi);
+  const exact = bank.buffers.get(bank.key(wantedZone));
+  const nearestLoaded = exact ? null : bank.zones
+    .filter(zone => bank.buffers.has(bank.key(zone)))
+    .reduce((best, zone) => !best || Math.abs(zone.rootNote - midi) < Math.abs(best.rootNote - midi) ? zone : best, null);
+  const zone = exact ? wantedZone : nearestLoaded;
+  const buffer = exact || (zone && bank.buffers.get(bank.key(zone)));
+  if (!exact) bank.load(wantedZone).catch(() => {
+    if (selectedInstrument === instrumentSelect.value) setSampleStatus('音色暂未载入 · 可继续演奏');
   });
+  if (!buffer) {
+    // A first tap never waits for network or audio decoding.
+    playPluck(note, start, gainValue, Math.min(duration, 0.85));
+    return;
+  }
+
+  const source = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  const t = Math.max(start, ctx.currentTime + 0.003);
+  const length = Math.min(duration + 0.25, buffer.duration - 0.02);
+  const velocity = randomVelocity ? 0.9 + Math.random() * 0.1 : 1;
+  source.buffer = buffer;
+  source.playbackRate.value = Math.pow(2, (midi - zone.rootNote) / 12) * playbackRateOffset;
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, gainValue * velocity), t + 0.007);
+  gain.gain.setTargetAtTime(0.0001, t + length * 0.65, 0.14);
+  if (selectedInstrument === "electric") {
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(3800, t);
+    source.connect(filter).connect(gain).connect(masterGain);
+  } else source.connect(gain).connect(masterGain);
+  source.start(t);
+  source.stop(t + length);
 }
 
 function makeDriveCurve(amount = 24) {
@@ -1787,6 +1765,7 @@ function createPluckBuffer(freq, duration = 1.35) {
   return buffer;
 }
 
+const fallbackPluckBuffers = new Map();
 function playPluck(note, start, gainValue = 0.22, duration = 1.25) {
   const ctx = ensureAudio();
   const freq = noteToFrequency(note);
@@ -1794,7 +1773,12 @@ function playPluck(note, start, gainValue = 0.22, duration = 1.25) {
   const gain = ctx.createGain();
   const filter = ctx.createBiquadFilter();
 
-  source.buffer = createPluckBuffer(freq, duration);
+  const cacheKey = `${note}:${duration.toFixed(2)}`;
+  if (!fallbackPluckBuffers.has(cacheKey)) {
+    if (fallbackPluckBuffers.size >= 48) fallbackPluckBuffers.delete(fallbackPluckBuffers.keys().next().value);
+    fallbackPluckBuffers.set(cacheKey, createPluckBuffer(freq, duration));
+  }
+  source.buffer = fallbackPluckBuffers.get(cacheKey);
   filter.type = "lowpass";
   filter.frequency.setValueAtTime(2600 + Math.random() * 900, start);
   filter.Q.value = 0.55;
@@ -2158,7 +2142,7 @@ async function startCamera() {
   const profile = PERFORMANCE_PROFILES[performanceMode];
   if (!handsModel) {
     handsModel = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}` });
-    handsModel.setOptions({ maxNumHands: 2, modelComplexity: profile.complexity, minDetectionConfidence: profile.detection, minTrackingConfidence: profile.tracking });
+    handsModel.setOptions({ maxNumHands: document.querySelector('#gestureMode')?.value === 'strum' ? 2 : 1, modelComplexity: profile.complexity, minDetectionConfidence: profile.detection, minTrackingConfidence: profile.tracking });
     handsModel.onResults(onHandResults);
   }
   if (!faceModel && window.FaceDetection && performanceMode === "stage") {
@@ -2319,8 +2303,9 @@ function updateDrumTouchZone(results) {
 
 function drawHand(results) {
   const rect = camera.getBoundingClientRect();
-  handCanvas.width = Math.max(1, Math.floor(rect.width));
-  handCanvas.height = Math.max(1, Math.floor(rect.height));
+  const width = Math.max(1, Math.floor(rect.width)), height = Math.max(1, Math.floor(rect.height));
+  if (handCanvas.width !== width) handCanvas.width = width;
+  if (handCanvas.height !== height) handCanvas.height = height;
   canvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
   const hands = results.multiHandLandmarks || [];
   if (!hands.length) return;
