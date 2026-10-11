@@ -1,6 +1,8 @@
-# 🎸 Vibe Air Guitar
+# 空气吉他 / Vibe Air Guitar
 
-空气吉他 — 基于浏览器的手势识别弹奏应用
+打开摄像头，用手势切换和弦，在浏览器里弹一把空气吉他。项目保留了和弦谱、节奏型和不同音色的实验功能。
+
+**English:** A browser-based air guitar experiment. Hand gestures select chords while the page plays sampled instruments and rhythm patterns.
 
 通过摄像头识别手指手势（1-5号），实时切换和弦并伴奏。纯前端，无需后端。
 
