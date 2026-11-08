@@ -122,8 +122,13 @@
   --faint: var(--text-muted);
   --ok: var(--success);
   --danger: var(--error);
-  --stage: var(--brand);
-  --shade: linear-gradient(180deg, color-mix(in srgb, var(--brand) 70%, transparent) 0%, transparent 30%, transparent 60%, color-mix(in srgb, var(--brand) 75%, transparent) 100%);
+  /* 演奏舞台（摄像头画面）用中性近黑，不用品牌深青绿（用户要求画面里不出现主题绿）。
+     这是本应用自己的画面底色，不属于品牌色板。舞台里只用白色和薄荷绿做强调，不用琥珀黄。 */
+  --stage: #0C0D0D;
+  --on-stage: #FFFFFF;
+  --stage-muted: rgba(255, 255, 255, 0.74);
+  --stage-highlight: var(--mint);
+  --shade: linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 60%, rgba(0,0,0,0.55) 100%);
   --shadow: var(--shadow-md);
   --radius: var(--radius-lg);
   --radius-sm: var(--radius-md);
@@ -152,7 +157,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 /* 舞台是深青绿区域：焦点框改用琥珀黄 */
-.stage :focus-visible { outline-color: var(--accent); }
+.stage :focus-visible { outline-color: var(--on-stage); }
 a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- 布局 ---------- */
@@ -263,12 +268,12 @@ a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; 
 
 .hud {
   position: absolute; left: 20px; top: 16px;
-  color: var(--on-brand);
+  color: var(--on-stage);
   pointer-events: none;
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);
   max-width: calc(100% - 140px);
 }
-.hud-label { font-size: 12px; letter-spacing: 0.08em; color: var(--mint); }
+.hud-label { font-size: 12px; letter-spacing: 0.08em; color: var(--stage-muted); }
 .hud-chord {
   font-size: clamp(56px, 11vw, 120px);
   line-height: 1;
@@ -279,18 +284,18 @@ a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; 
   transition: color 0.12s;
 }
 .hud-chord.idle { display: none; }
-.hud-chord.idle + .hud-meta { margin-top: 8px; font-size: 18px; color: var(--on-brand); }
+.hud-chord.idle + .hud-meta { margin-top: 8px; font-size: 18px; color: var(--on-stage); }
 .hud-chord.pop { animation: pop 0.22s ease-out; }
 @keyframes pop { from { transform: scale(0.94); opacity: 0.6; } to { transform: none; opacity: 1; } }
-.hud-meta { margin-top: 6px; font-size: 14px; color: var(--mint); }
+.hud-meta { margin-top: 6px; font-size: 14px; color: var(--stage-muted); }
 .hud-next {
   margin-top: 10px; display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 12px; border-radius: 999px;
-  background: color-mix(in srgb, var(--brand) 82%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  font-size: 13px; color: var(--mint);
+  background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  font-size: 13px; color: var(--stage-muted);
 }
-.hud-next b { color: var(--accent); font-weight: 650; }
-.hud-next .match { color: var(--on-brand); }
+.hud-next b { color: var(--stage-highlight); font-weight: 650; }
+.hud-next .match { color: var(--on-stage); }
 
 .beats {
   position: absolute; left: 20px; bottom: 18px;
@@ -303,36 +308,36 @@ a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; 
   transition: background 0.06s;
 }
 .beats i.beat { width: 30px; }
-.beats i.on { background: var(--accent); }
-.beats i.count { background: var(--on-brand); }
+.beats i.on { background: var(--stage-highlight); }
+.beats i.count { background: var(--on-stage); }
 
 .air-drum {
   position: absolute; right: 16px; top: 16px;
   width: 76px; height: 76px;
   display: grid; place-items: center; align-content: center; gap: 2px;
   border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--mint) 35%, transparent);
-  background: color-mix(in srgb, var(--brand) 70%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  color: var(--mint);
+  color: var(--stage-muted);
   font-size: 12px;
   overflow: hidden;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .air-drum svg { width: 24px; height: 24px; }
-.air-drum[aria-pressed="true"] { color: var(--on-accent); border-color: transparent; background: var(--accent); }
-.air-drum.armed { border-color: var(--on-brand); }
+.air-drum[aria-pressed="true"] { color: var(--on-mint); border-color: transparent; background: var(--stage-highlight); }
+.air-drum.armed { border-color: var(--on-stage); }
 .air-drum-progress {
   position: absolute; left: 0; bottom: 0; height: 3px; width: 0;
-  background: var(--accent);
+  background: var(--on-stage);
 }
 .air-drum.armed .air-drum-progress { width: 100%; transition: width 0.3s linear; }
 
 .perf {
   position: absolute; right: 16px; bottom: 14px;
   padding: 4px 9px; border-radius: 8px;
-  background: color-mix(in srgb, var(--brand) 85%, transparent);
-  color: var(--mint);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--stage-muted);
   font: 12px/1.4 var(--mono);
   pointer-events: none;
 }
@@ -346,36 +351,78 @@ a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; 
   z-index: 5;
 }
 
-/* ---------- 引导 ---------- */
-.intro {
+/* ---------- 摄像头入口与新手教程 ---------- */
+.cam-cta {
   position: absolute; inset: 0; z-index: 4;
   display: grid; place-items: center;
-  padding: 20px;
-  background: rgba(8, 9, 10, 0.55);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-}
-.intro-card {
-  width: min(560px, 100%);
-  max-height: 100%;
+  padding: var(--space-6) var(--space-4);
+  background: color-mix(in srgb, var(--stage) 72%, transparent);
   overflow: auto;
-  padding: 28px;
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
 }
-.intro h1 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -0.02em; }
-.intro-lead { margin: 10px 0 18px; color: var(--muted); }
-.guide { list-style: none; padding: 0; margin: 0 0 20px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.cam-cta-inner { display: grid; justify-items: center; gap: var(--space-4); width: min(560px, 100%); text-align: center; color: var(--on-stage); }
+.cam-cta-title { margin: 0; font-size: 28px; line-height: 1.25; letter-spacing: -0.02em; }
+.cam-cta-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+  min-width: min(320px, 100%); height: 64px; padding: 0 32px;
+  border: 0; border-radius: var(--radius-full);
+  background: var(--on-stage); color: var(--stage);
+  font-size: 20px; font-weight: 700;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease-out;
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.cam-cta-btn svg { width: 28px; height: 28px; }
+.cam-cta-btn:hover { transform: scale(1.03); }
+.cam-cta-btn:disabled { opacity: 0.7; animation: none; }
+@keyframes breathe { 50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--on-stage) 14%, transparent), 0 10px 30px rgba(0,0,0,0.35); } }
+.cam-cta-lead { margin: 0; color: var(--stage-muted); font-size: 15px; }
+.guide { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--space-2); width: 100%; }
 .guide li {
-  display: grid; justify-items: center; gap: 6px;
+  display: grid; justify-items: center; gap: 4px;
   padding: 12px 4px 10px;
-  border-radius: 12px; background: var(--surface-2);
-  font-size: 12px; color: var(--muted); text-align: center;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--on-stage) 8%, transparent);
+  font-size: 12px; color: var(--stage-muted);
 }
-.guide li b { font-size: 18px; color: var(--text); letter-spacing: -0.02em; }
-.intro-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.fine { margin: 14px 0 0; font-size: 12px; color: var(--faint); }
+.guide li b { font-size: 18px; color: var(--on-stage); letter-spacing: -0.02em; }
+.link-btn {
+  border: 0; background: none; padding: 4px 2px;
+  color: inherit; font-size: 14px;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.cam-cta .link-btn { color: var(--on-stage); }
+.fine { margin: 0; font-size: 12px; color: var(--stage-muted); }
+
+.cam-pill {
+  position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: inline-flex; align-items: center; gap: 10px;
+  height: 56px; padding: 0 26px;
+  border: 0; border-radius: var(--radius-full);
+  background: var(--on-stage); color: var(--stage);
+  font-size: 17px; font-weight: 700; white-space: nowrap;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.cam-pill svg { width: 24px; height: 24px; }
+
+.coach {
+  position: absolute; z-index: 5; left: 50%; bottom: 34px; transform: translateX(-50%);
+  width: min(460px, calc(100% - 24px));
+  padding: 12px 16px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised); color: var(--text);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--divider);
+}
+.cam-cta:not([hidden]) ~ .coach { display: none; }
+.coach-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.coach-step { font-size: 12px; color: var(--text-muted); letter-spacing: 0.04em; }
+.coach .link-btn { font-size: 13px; color: var(--text-muted); }
+.coach-text { margin: 4px 0 10px; font-size: 16px; font-weight: 600; line-height: 1.5; }
+.coach-text .big { font-size: 22px; margin-right: 6px; }
+.coach-bar { height: 4px; border-radius: 2px; background: var(--divider); overflow: hidden; }
+.coach-bar i { display: block; height: 100%; width: 0; background: var(--primary); transition: width 0.3s ease-out; }
+.coach.done-flash { animation: coachdone 0.5s ease-out; }
+@keyframes coachdone { 30% { transform: translateX(-50%) scale(1.03); } }
 
 /* ---------- 手指图示 ---------- */
 .fingers { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; }
@@ -646,13 +693,13 @@ kbd {
   .seg-mode button { padding: 0 9px; font-size: 12px; height: 38px; }
   .chip { display: none; }
   .sheet { width: 100%; }
-  .intro { padding: 12px; align-items: end; }
-  .intro-card { padding: 20px; border-radius: 18px; }
-  .intro h1 { font-size: 21px; }
-  .intro-lead { font-size: 14px; margin-bottom: 14px; }
-  .guide { gap: 6px; margin-bottom: 16px; }
+  .cam-cta-title { font-size: 22px; }
+  .cam-cta-btn { height: 58px; font-size: 18px; min-width: 0; width: 100%; }
+  .guide { gap: 6px; }
   .guide li { padding: 10px 2px 8px; }
-  .intro-actions .btn { flex: 1; }
+  .cam-pill { height: 52px; font-size: 16px; padding: 0 20px; }
+  .coach { bottom: 28px; }
+  .coach-text { font-size: 15px; }
 }
 
 @media (max-width: 380px) {
@@ -669,8 +716,9 @@ kbd {
   .pad-chord { font-size: 20px; }
   .play, .stepper, .seg-mode, .chip { height: 42px; }
   .hud-chord { font-size: 56px; }
-  .intro { align-items: center; }
-  .guide { display: none; }
+  .guide, .cam-cta-lead, .fine { display: none; }
+  .cam-cta-title { font-size: 18px; }
+  .cam-cta-btn { height: 48px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

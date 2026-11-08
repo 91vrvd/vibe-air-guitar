@@ -1,10 +1,10 @@
 import {
   KEYS, PROGRESSION_PRESETS, allChordOptions, bindingsFromProgression, defaultBindings,
   keyInterval, normalizeChord, splitProgression, transposeChord, transposeProgression, voiceChord,
-} from "./theory.js";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js";
-import { Engine, INSTRUMENTS } from "./audio.js";
-import { classifyHand, GestureStabilizer } from "./gesture.js";
+} from "./theory.js?v=2.4";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.4";
+import { Engine, INSTRUMENTS } from "./audio.js?v=2.4";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=2.4";
 
 const $ = (sel) => document.querySelector(sel);
 const STORE_KEY = "airGuitar.v2";
@@ -18,7 +18,7 @@ const DEFAULTS = {
   bpm: 96,
   instrument: "acoustic",
   style: "strum",
-  strumId: "cardigan",
+  strumId: "folk_soft",
   arpId: "classic",
   customSteps: DEFAULT_CUSTOM_STEPS.slice(),
   drumId: "standard",
@@ -41,6 +41,7 @@ const DEFAULTS = {
   perf: false,
   theme: null,
   introSeen: false,
+  tutorialDone: false,
 };
 
 function loadSettings() {
@@ -82,6 +83,7 @@ const state = {
   lastLandmarks: null,
   airDrumSince: 0,
   airDrumCooldown: 0,
+  ctaFull: !settings.introSeen, // 摄像头入口：大卡片 / 画面中间的按钮
 };
 
 let tracker = null;
@@ -94,7 +96,8 @@ const el = {
   camBtn: $("#camBtn"), themeBtn: $("#themeBtn"), helpBtn: $("#helpBtn"), settingsBtn: $("#settingsBtn"),
   hudChord: $("#hudChord"), hudMeta: $("#hudMeta"), hudNext: $("#hudNext"), hudLabel: $("#hudLabel"),
   beats: $("#beats"), airDrum: $("#airDrum"), perf: $("#perf"), toast: $("#toast"),
-  intro: $("#intro"), guide: $("#guide"), introCam: $("#introCam"), introSkip: $("#introSkip"),
+  intro: $("#intro"), guide: $("#guide"), introCam: $("#introCam"), introSkip: $("#introSkip"), camPill: $("#camPill"),
+  coach: $("#coach"), coachStep: $("#coachStep"), coachText: $("#coachText"), coachBar: $("#coachBar"), coachSkip: $("#coachSkip"),
   pads: $("#pads"), playBtn: $("#playBtn"), playLabel: $("#playLabel"),
   bpmDown: $("#bpmDown"), bpmUp: $("#bpmUp"), bpmInput: $("#bpmInput"),
   modeSeg: $("#modeSeg"), rhythmChip: $("#rhythmChip"), rhythmChipText: $("#rhythmChipText"),
@@ -340,6 +343,7 @@ function renderLive() {
     pad.classList.toggle("active", f === finger);
     pad.classList.toggle("target", Boolean(targetShape) && settings.bindings[f] === targetShape);
   });
+  checkTutorial();
 }
 
 function renderBeats(stepInfo) {
@@ -358,6 +362,7 @@ function renderBeats(stepInfo) {
 function renderPlay() {
   el.playBtn.setAttribute("aria-pressed", String(engine.running));
   el.playLabel.textContent = engine.running ? "停止" : "开始伴奏";
+  checkTutorial();
 }
 
 function renderRhythmChip() {
@@ -598,7 +603,7 @@ function bindSettings() {
   el.resetAll.addEventListener("click", () => {
     if (!confirm("恢复全部默认设置？自定义的和弦绑定和走向会被清掉。")) return;
     const theme = settings.theme;
-    Object.assign(settings, structuredClone(DEFAULTS), { theme, introSeen: true });
+    Object.assign(settings, structuredClone(DEFAULTS), { theme, introSeen: true, tutorialDone: true });
     customAudio.clear();
     fillPresets();
     renderSettings();
@@ -645,7 +650,7 @@ desktopMq.addEventListener?.("change", () => openSheet(isDesktop()));
 function applyTheme() {
   const theme = settings.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
   document.documentElement.dataset.theme = theme;
-  accentColor = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || accentColor;
+  accentColor = getComputedStyle(document.documentElement).getPropertyValue("--stage-highlight").trim() || accentColor;
   document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#FFFFFF";
 }
 
@@ -656,13 +661,14 @@ async function toggleCamera() {
 }
 
 async function startCamera() {
-  hideIntro();
   ensureAudioReady();
   el.camBtn.disabled = true;
   el.introCam.disabled = true;
+  el.camPill.disabled = true;
+  el.introCam.querySelector("span").textContent = "正在打开…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js");
+      const { HandTracker } = await import("./hands.js?v=2.4");
       tracker = new HandTracker(el.video, {
         onResult: onHands,
         onStatus: (s) => {
@@ -678,8 +684,11 @@ async function startCamera() {
     el.camBtn.setAttribute("aria-label", "关闭摄像头");
     stabilizer = new GestureStabilizer({ frames: settings.stability });
     state.latchedFinger = null;
+    hideIntro();
+    if (tut.active && tut.track === "keys") { tut.track = "camera"; tut.i = 1; }
     resizeOverlay();
     refreshStatus();
+    checkTutorial();
     if (tracker.delegate === "CPU") toast("设备不支持 GPU 加速，识别会稍慢一些");
   } catch (error) {
     const messages = {
@@ -694,6 +703,8 @@ async function startCamera() {
   } finally {
     el.camBtn.disabled = false;
     el.introCam.disabled = false;
+    el.camPill.disabled = false;
+    updateCta();
   }
 }
 
@@ -709,6 +720,7 @@ function stopCamera() {
   clearOverlay();
   refreshStatus();
   updateChord();
+  updateCta();
 }
 
 function onHands(result, now) {
@@ -743,7 +755,7 @@ function mapPoint(p, vw, vh, cw, ch) {
 
 let overlaySize = { w: 0, h: 0, dpr: 1 };
 let airDrumBox = null; // 相对舞台的坐标，缩放时更新，避免每帧读布局
-let accentColor = "#ffb547";
+let accentColor = "#ABD1C6";
 function resizeOverlay() {
   const rect = el.stage.getBoundingClientRect();
   const z = el.airDrum.getBoundingClientRect();
@@ -832,7 +844,7 @@ async function togglePlay() {
     toast("浏览器没允许播放声音，再点一次试试");
     return;
   }
-  hideIntro();
+  if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) tut.track = "keys"; }
   applyEngineSettings();
   engine.chord = chordFor(state.activeFinger);
   await engine.start();
@@ -876,20 +888,93 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// ---------------- 引导 ----------------
+// ---------------- 摄像头入口 ----------------
+function updateCta() {
+  const full = !state.cameraOn && state.ctaFull;
+  el.intro.hidden = !full;
+  el.camPill.hidden = state.cameraOn || full;
+  el.introCam.querySelector("span").textContent = "开启摄像头";
+}
+
 function hideIntro() {
-  if (el.intro.hidden) return;
-  el.intro.hidden = true;
+  state.ctaFull = false;
   if (!settings.introSeen) { settings.introSeen = true; save(); }
+  updateCta();
+}
+
+// ---------------- 新手教程 ----------------
+// 每一步都等用户真的做到了才往下走，做到的那一刻自动跳到下一步
+const tut = { active: false, track: "camera", i: 0 };
+
+function tutorialSteps() {
+  const n = (f) => `<b>${escapeHtml(soundingName(settings.bindings[f]))}</b>`;
+  if (tut.track === "keys") {
+    return [
+      { text: `点下方的 ${n(1)} 键，听一下`, done: () => state.activeFinger === 1 },
+      { text: `再点 ${n(2)} 键换个和弦（电脑上也能按数字键 1–5）`, done: () => state.activeFinger === 2 },
+      { text: "点左下角「开始伴奏」，鼓和节奏会跟上", done: () => engine.running },
+      { text: "想用手势弹？点画面中间的「开启摄像头」", done: () => state.cameraOn },
+    ];
+  }
+  return [
+    { text: "点画面中间的「开启摄像头」，浏览器问权限时点「允许」", done: () => state.cameraOn },
+    { text: `<span class="big">☝️</span>对着镜头伸出 1 根食指，会弹出 ${n(1)}`, done: () => state.camFinger === 1 },
+    { text: `<span class="big">✌️</span>换成 2 根手指，和弦变成 ${n(2)}`, done: () => state.camFinger === 2 },
+    { text: '<span class="big">✊</span>握拳，声音就停了', done: () => state.camFinger === 0 },
+    { text: "点左下角「开始伴奏」，鼓点响起后边换手势边弹", done: () => engine.running },
+  ];
+}
+
+function startTutorial() {
+  tut.active = true;
+  tut.track = "camera";
+  tut.i = 0;
+  checkTutorial();
+}
+
+function finishTutorial(completed) {
+  tut.active = false;
+  el.coach.hidden = true;
+  settings.tutorialDone = true;
+  save();
+  if (completed) toast("教程完成！以后想再看，点右上角的「?」", 3600);
+}
+
+function checkTutorial() {
+  if (!tut.active) return;
+  const steps = tutorialSteps();
+  const before = tut.i;
+  while (tut.i < steps.length && steps[tut.i].done()) tut.i += 1;
+  if (tut.i >= steps.length) { finishTutorial(true); return; }
+  el.coach.hidden = false;
+  el.coachStep.textContent = `新手教程 ${tut.i + 1}/${steps.length}`;
+  el.coachText.innerHTML = steps[tut.i].text;
+  el.coachBar.style.width = `${(tut.i / steps.length) * 100}%`;
+  if (tut.i !== before) {
+    el.coach.classList.remove("done-flash");
+    void el.coach.offsetWidth;
+    el.coach.classList.add("done-flash");
+  }
 }
 
 // ---------------- 事件 ----------------
 function bindUi() {
   el.camBtn.addEventListener("click", toggleCamera);
   el.introCam.addEventListener("click", startCamera);
-  el.introSkip.addEventListener("click", () => { hideIntro(); ensureAudioReady(); });
-  el.helpBtn.addEventListener("click", () => { renderGuide(); el.intro.hidden = false; });
-  el.intro.addEventListener("click", (e) => { if (e.target === el.intro) hideIntro(); });
+  el.camPill.addEventListener("click", startCamera);
+  el.introSkip.addEventListener("click", () => {
+    hideIntro();
+    ensureAudioReady();
+    if (tut.active && tut.i === 0) { tut.track = "keys"; tut.i = 0; }
+    checkTutorial();
+  });
+  el.coachSkip.addEventListener("click", () => finishTutorial(false));
+  el.helpBtn.addEventListener("click", () => {
+    renderGuide();
+    if (!state.cameraOn) state.ctaFull = true;
+    updateCta();
+    startTutorial();
+  });
   el.themeBtn.addEventListener("click", () => {
     settings.theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
     applyTheme();
@@ -921,6 +1006,7 @@ function bindUi() {
     if (!pad) return;
     e.preventDefault();
     const f = Number(pad.dataset.finger);
+    if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) tut.track = "keys"; }
     if (state.cameraOn) {
       pad.setPointerCapture?.(e.pointerId);
       pressFinger(f);
@@ -968,7 +1054,7 @@ function bindUi() {
     } else if (k === "s" || k === "S") {
       openSheet(!sheetIsOpen());
     } else if (k === "Escape") {
-      if (!el.intro.hidden) hideIntro(); else if (!isDesktop()) openSheet(false);
+      if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) { tut.track = "keys"; checkTutorial(); } } else if (!isDesktop()) openSheet(false);
     }
   });
   document.addEventListener("keyup", (e) => {
@@ -1001,7 +1087,8 @@ function init() {
   bindUi();
   openSheet(isDesktop());
   applyEngineSettings();
-  if (settings.introSeen) el.intro.hidden = true;
+  updateCta();
+  if (!settings.tutorialDone) startTutorial();
   refreshStatus();
   requestAnimationFrame(frame);
   // 空闲时预先下载默认音色（不到 1MB），首次出声不用等

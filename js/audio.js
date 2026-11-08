@@ -4,8 +4,8 @@
 // 2. 换和弦时取消尚未发声的旧和弦、重排新和弦，并按需立刻扫一下，所以既跟手又不乱拍。
 // 3. 每根弦只保留一个发声体：新音会切掉同弦旧音，像真吉他一样，也让同时发声数有上限。
 
-import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js";
+import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=2.4";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.4";
 
 export const INSTRUMENTS = [
   { id: "acoustic", name: "木吉他（钢弦）", kind: "sampler" },
@@ -27,7 +27,7 @@ const SAMPLERS = {
     base: "samples/v2/acoustic/",
     zones: range(40, 74),
     file: (zone) => `a${zone}.m4a`,
-    gain: 1.3,
+    gain: 1.75,
     bright: [1700, 11000],
   },
   nylon: {
@@ -50,9 +50,9 @@ const SAMPLERS = {
 
 // 每种音色走哪条声音链：dry 直出、body 琴箱共鸣、amp 音箱模拟、verb 房间混响
 const TONES = {
-  acoustic: { dry: 1, body: 0.5, amp: 0, verb: 0.14 },
-  nylon: { dry: 1, body: 0.35, amp: 0, verb: 0.15 },
-  electric: { dry: 0, body: 0, amp: 1, verb: 0.2 },
+  acoustic: { dry: 1, body: 0.3, amp: 0, verb: 0.14 },
+  nylon: { dry: 1, body: 0.25, amp: 0, verb: 0.15 },
+  electric: { dry: 0, body: 0, amp: 1, verb: 0.22 },
   piano: { dry: 1, body: 0, amp: 0, verb: 0.18 },
   violin: { dry: 1, body: 0, amp: 0, verb: 0.22 },
   synth: { dry: 1, body: 0, amp: 0, verb: 0.08 },
@@ -121,6 +121,7 @@ export class Engine {
     this.buffers = new Map(); // url -> AudioBuffer（已解码）
     this.loading = new Map(); // url -> Promise
     this.onsets = new WeakMap();
+    this.peaks = new WeakMap(); // 外部音源（钢琴/小提琴）录得很轻，按峰值补齐响度
     this.pluckCache = new Map();
     this.rr = 0;
     this.onLoadState = null; // (state, detail) 回调
@@ -134,9 +135,9 @@ export class Engine {
     const ctx = new Ctx({ latencyHint: "interactive" });
     this.ctx = ctx;
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14;
+    comp.threshold.value = -9;
     comp.knee.value = 10;
-    comp.ratio.value = 3.5;
+    comp.ratio.value = 3;
     comp.attack.value = 0.004;
     comp.release.value = 0.18;
     this.master = ctx.createGain();
@@ -164,23 +165,29 @@ export class Engine {
     this.bodyConv.buffer = makeBodyIR(ctx);
     this.bodyGain = ctx.createGain();
     this.guitarIn.connect(this.bodyConv).connect(this.bodyGain).connect(this.guitarBus);
-    // 电吉他：前级 → 软削波 → 1x12 音箱频响（高通、中频挖一点、存在感、低通）
+    // 电吉他（干净音色）：压缩器拉长余音（原始采样 1 秒内就衰减 25dB，听着发干）
+    // → 很轻的电子管式温暖 → 1x12 音箱频响。不用重失真：多根弦叠进失真会互相调制，扫弦发糊。
     this.ampIn = ctx.createGain();
-    const pre = ctx.createBiquadFilter();
-    pre.type = "highpass"; pre.frequency.value = 100; pre.Q.value = 0.5;
+    const pre = biquad(ctx, "highpass", 90, 0.5);
+    const ampComp = ctx.createDynamicsCompressor();
+    ampComp.threshold.value = -30;
+    ampComp.knee.value = 12;
+    ampComp.ratio.value = 5;
+    ampComp.attack.value = 0.012; // 让拨弦起音先过去
+    ampComp.release.value = 0.3;
     const drive = ctx.createGain();
-    drive.gain.value = 1.6;
+    drive.gain.value = 1.4;
     const shaper = ctx.createWaveShaper();
-    shaper.curve = makeDriveCurve(2.4);
+    shaper.curve = makeDriveCurve(1.2);
     shaper.oversample = "2x";
-    const cabHp = biquad(ctx, "highpass", 85, 0.7);
-    const cabMid = biquad(ctx, "peaking", 420, 1, -3);
-    const cabPres = biquad(ctx, "peaking", 2300, 0.9, 3.5);
-    const cabLp = biquad(ctx, "lowpass", 4800, 0.8);
-    const cabLp2 = biquad(ctx, "lowpass", 7500, 0.5);
+    const cabHp = biquad(ctx, "highpass", 80, 0.7);
+    const cabMid = biquad(ctx, "peaking", 420, 1, -1.5);
+    const cabPres = biquad(ctx, "peaking", 2500, 0.8, 2.5);
+    const cabLp = biquad(ctx, "lowpass", 6500, 0.7);
+    const cabLp2 = biquad(ctx, "lowpass", 9500, 0.5);
     const ampOut = ctx.createGain();
-    ampOut.gain.value = 0.6;
-    this.guitarIn.connect(this.ampIn).connect(pre).connect(drive).connect(shaper)
+    ampOut.gain.value = 0.7;
+    this.guitarIn.connect(this.ampIn).connect(pre).connect(ampComp).connect(drive).connect(shaper)
       .connect(cabHp).connect(cabMid).connect(cabPres).connect(cabLp).connect(cabLp2).connect(ampOut).connect(this.guitarBus);
     // 房间混响：程序生成的冲激响应（无版权问题），吉他和鼓少量发送
     this.reverb = ctx.createConvolver();
@@ -269,6 +276,7 @@ export class Engine {
       .then((ab) => new Promise((resolve, reject) => ctx.decodeAudioData(ab, resolve, reject)))
       .then((buffer) => {
         this.onsets.set(buffer, detectOnset(buffer));
+        this.peaks.set(buffer, peakOf(buffer));
         this.buffers.set(url, buffer);
         this.loading.delete(url);
         return buffer;
@@ -330,7 +338,7 @@ export class Engine {
    * 弹一个音。dur 为空 = 让它自然延音到采样结束（被同弦新音或止音打断）；
    * dead = 闷音/死音：极短 + 发闷。
    */
-  playNote(midi, t, vel, { string = null, dur = null, dead = false } = {}) {
+  playNote(midi, t, vel, { string = null, dur = null, dead = false, soft = 0 } = {}) {
     const ctx = this.ctx;
     const inst = INSTRUMENTS.find((i) => i.id === this.instrument) || INSTRUMENTS[0];
     const out = string !== null ? this.stringPans[string] : this.guitarIn;
@@ -357,6 +365,7 @@ export class Engine {
       if (!buffer) this.loadBuffer(url);
       gainScale = inst.id === "violin" ? 0.6 : 0.85;
     }
+    if (buffer && inst.kind === "soundfont") gainScale *= Math.min(8, 0.7 / Math.max(0.02, this.peaks.get(buffer) || 0.7));
     if (!buffer) return this.track(this.playPluck(midi, t, vel, dur || 2.4, out), string);
 
     const src = ctx.createBufferSource();
@@ -374,8 +383,15 @@ export class Engine {
       node = node.connect(lp);
     }
     const level = (dead ? 0.26 : 0.32) * vel * gainScale;
-    g.gain.setValueAtTime(level, t);
-    const offset = (this.onsets.get(buffer) || 0) + (this.humanize ? Math.random() * 0.003 : 0);
+    // soft：扫弦里的弦——跳过单独拨弦那一下“叮”的起音，再用几毫秒淡入。
+    // 逐个独立拨弦的采样直接叠在一起会像竖琴/琶音，扫弦的“刷”感靠拨片声统一给出。
+    if (soft) {
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(level, t + soft * 0.6);
+    } else {
+      g.gain.setValueAtTime(level, t);
+    }
+    const offset = (this.onsets.get(buffer) || 0) + soft + (this.humanize ? Math.random() * 0.003 : 0);
     const natural = (buffer.duration - offset) / rate;
     const length = dur ? Math.min(dur, natural) : natural;
     if (dur) g.gain.setTargetAtTime(0, t + length, dead ? 0.008 : 0.03);
@@ -394,8 +410,8 @@ export class Engine {
     src.buffer = this.noise;
     const f = ctx.createBiquadFilter();
     f.type = "bandpass";
-    f.frequency.value = dir === "D" ? 2600 : 3600;
-    f.Q.value = 0.8;
+    f.frequency.value = dir === "D" ? 1900 : 2600;
+    f.Q.value = 0.6;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(level, t + 0.002);
@@ -509,23 +525,29 @@ export class Engine {
       const reach = accent > 0.85 ? 4 : 3;
       for (let i = 5; i >= Math.max(voicing.bassString, 6 - reach); i -= 1) if (strings[i] !== null) order.push(i);
     }
-    // 越用力扫得越快；每根弦之间的间隔逐渐缩短（手腕在加速）
-    let gap = this.spread ? (dir === "D" ? 0.017 - 0.006 * accent : 0.012 - 0.004 * accent) : 0.0025;
+    // 真人扫一下 6 根弦大约 25–45ms：越用力越快，手腕在加速，弦间隔逐渐变短
+    let gap = this.spread ? (dir === "D" ? 0.0085 - 0.003 * accent : 0.006 - 0.002 * accent) : 0.002;
     const voices = [];
     let at = t;
-    const span = gap * order.length * 0.85;
-    if (this.instrument !== "piano" && INSTRUMENTS.find((i) => i.id === this.instrument)?.kind === "sampler") {
-      voices.push(this.pickNoise(t, span, (short ? 0.02 : 0.035) * accent, dir));
+    const isGuitar = INSTRUMENTS.find((i) => i.id === this.instrument)?.kind === "sampler";
+    if (isGuitar) {
+      const span = Math.max(0.012, gap * order.length);
+      voices.push(this.pickNoise(t, span, (short ? 0.018 : 0.03) * accent, dir));
     }
+    // 多根弦同时响，单根力度要比单音拨弦小，不然一扫就把总线压缩器顶得一抽一抽
+    const stack = 0.7;
     order.forEach((idx, n) => {
-      const jitter = this.humanize ? (Math.random() - 0.5) * 0.003 : 0;
-      const velJitter = this.humanize ? 0.9 + Math.random() * 0.18 : 1;
-      const shape = dir === "D" ? 1 - n * 0.035 : 0.85 - n * 0.06;
-      const vel = Math.max(0.1, Math.min(1, accent * shape * velJitter));
-      const v = this.playNote(this.shift(strings[idx]), Math.max(t, at + jitter), vel, { string: idx, dur: short ? 0.18 : null });
+      const jitter = this.humanize ? (Math.random() - 0.5) * 0.002 : 0;
+      const velJitter = this.humanize ? 0.92 + Math.random() * 0.14 : 1;
+      // 下扫：先碰到的低音弦最实，往后略轻；上扫：最先碰到的高音弦最实
+      const shape = dir === "D" ? 1 - n * 0.04 : 0.9 - n * 0.07;
+      const vel = Math.max(0.1, Math.min(1, accent * shape * velJitter * stack));
+      // 第一根弦保留一点起音（拨片碰到的瞬间），后面的弦越来越“刷”
+      const soft = isGuitar ? (n === 0 ? 0.002 : 0.006 + Math.min(n, 4) * 0.0015) : 0;
+      const v = this.playNote(this.shift(strings[idx]), Math.max(t, at + jitter), vel, { string: idx, dur: short ? 0.18 : null, soft });
       if (v) voices.push(v);
       at += gap * (this.humanize ? 0.85 + Math.random() * 0.3 : 1);
-      gap *= 0.95;
+      gap *= 0.93;
     });
     return voices;
   }
@@ -913,6 +935,13 @@ function nearestZone(zones, midi) {
     if (d < diff) { diff = d; best = z; }
   }
   return best;
+}
+
+function peakOf(buffer) {
+  const d = buffer.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < d.length; i += 4) { const v = Math.abs(d[i]); if (v > peak) peak = v; }
+  return peak;
 }
 
 function detectOnset(buffer) {

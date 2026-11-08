@@ -14,7 +14,7 @@
       if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
     } catch {}
   </script>
-  <link rel="stylesheet" href="./styles.css?v=2.0.0">
+  <link rel="stylesheet" href="./styles.css?v=2.4">
 </head>
 <body>
   <div class="app" id="app">
@@ -33,7 +33,7 @@
         <button class="icon-btn" id="themeBtn" type="button" aria-label="切换深浅色" title="深浅色">
           <svg viewBox="0 0 24 24"><path class="sun" d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4"/><circle class="sun" cx="12" cy="12" r="4"/><path class="moon" d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
         </button>
-        <button class="icon-btn" id="helpBtn" type="button" aria-label="玩法说明" title="玩法说明">
+        <button class="icon-btn" id="helpBtn" type="button" aria-label="新手教程" title="新手教程">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.5"/><path d="M12 16.8v.2"/></svg>
         </button>
         <button class="icon-btn" id="settingsBtn" type="button" aria-label="设置" aria-expanded="false" aria-controls="sheet" title="设置 (S)">
@@ -64,18 +64,33 @@
 
       <div class="perf" id="perf" hidden></div>
 
-      <section class="intro" id="intro" aria-labelledby="introTitle">
-        <div class="intro-card">
-          <h1 id="introTitle">伸出手指，弹空气吉他</h1>
-          <p class="intro-lead">打开摄像头，用 1 到 5 根手指切换和弦，伴奏跟着你的手走。没有摄像头也能用下方按键或数字键 1–5 来弹。</p>
+      <section class="cam-cta" id="intro" aria-labelledby="introTitle">
+        <div class="cam-cta-inner">
+          <h1 id="introTitle" class="cam-cta-title">伸出手指，弹空气吉他</h1>
+          <button class="cam-cta-btn" id="introCam" type="button">
+            <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 10.5l4-2.5v8l-4-2.5"/></svg>
+            <span>开启摄像头</span>
+          </button>
+          <p class="cam-cta-lead">对着镜头伸出 1–5 根手指，每种手势弹一个和弦</p>
           <ol class="guide" id="guide"></ol>
-          <div class="intro-actions">
-            <button class="btn primary" id="introCam" type="button">开启摄像头</button>
-            <button class="btn ghost" id="introSkip" type="button">先用按键试试</button>
-          </div>
-          <p class="fine">画面只在你的设备上处理，不上传。握拳 = 静音；只竖大拇指不会触发。</p>
+          <button class="link-btn" id="introSkip" type="button">没有摄像头？先用下方按键弹</button>
+          <p class="fine">画面只在你的设备上处理，不上传</p>
         </div>
       </section>
+
+      <button class="cam-pill" id="camPill" type="button" hidden>
+        <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 10.5l4-2.5v8l-4-2.5"/></svg>
+        <span>开启摄像头，用手势弹</span>
+      </button>
+
+      <div class="coach" id="coach" role="status" aria-live="polite" hidden>
+        <div class="coach-head">
+          <span class="coach-step" id="coachStep">新手教程 1/5</span>
+          <button class="link-btn" id="coachSkip" type="button">跳过</button>
+        </div>
+        <div class="coach-text" id="coachText"></div>
+        <div class="coach-bar"><i id="coachBar"></i></div>
+      </div>
 
       <div class="toast" id="toast" role="alert" hidden></div>
     </main>
@@ -241,6 +256,6 @@
     <div class="scrim" id="scrim" hidden></div>
   </div>
 
-  <script type="module" src="./js/main.js?v=2.0.0"></script>
+  <script type="module" src="./js/main.js?v=2.4"></script>
 </body>
 </html>
