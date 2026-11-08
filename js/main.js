@@ -16,7 +16,7 @@ const DEFAULTS = {
   key: "C",
   capo: 0,
   bpm: 96,
-  instrument: "nylon",
+  instrument: "acoustic",
   style: "strum",
   strumId: "cardigan",
   arpId: "classic",
@@ -646,7 +646,7 @@ function applyTheme() {
   const theme = settings.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
   document.documentElement.dataset.theme = theme;
   accentColor = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || accentColor;
-  document.querySelector('meta[name="theme-color"]').content = theme === "light" ? "#f5f4f1" : "#0f1012";
+  document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#FFFFFF";
 }
 
 // ---------------- 摄像头 ----------------

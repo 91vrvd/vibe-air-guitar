@@ -18,7 +18,7 @@
 - **手势换和弦**：开伴奏后，比几根手指就弹哪个和弦；松手立刻停（也可以改成「保持和弦，握拳停」）。
 - **自动走谱**：按和弦谱每小节自动换和弦，适合边弹边唱；画面会提示下一个和弦该比几根手指。
 - **没有摄像头**：点下方五个和弦键，或键盘数字键 `1`–`5`；`空格` 开始/停止，`↑` `↓` 调速度，`0` 静音，`C` 开关摄像头，`S` 设置。
-- 设置里可换音色（尼龙吉他、清音电吉他、钢琴、半岛铁盒、玻璃铃、星光琴、小提琴）、20 种扫弦节奏、分解/自定义指弹、20 种鼓型、调和变调夹、每根手指绑定的和弦，或给手指上传自己的音频。
+- 设置里可换音色（木吉他/钢弦、尼龙吉他、电吉他/小音箱、钢琴、半岛铁盒、玻璃铃、星光琴、小提琴）、20 种扫弦节奏、分解/自定义指弹、20 种鼓型、调和变调夹、每根手指绑定的和弦，或给手指上传自己的音频。
 
 ## 本地运行
 
@@ -42,23 +42,26 @@ js/hands.js         摄像头 + MediaPipe HandLandmarker（按需加载，GPU �
 js/theory.js        和弦解析、吉他式排布、移调、手指绑定
 js/patterns.js      扫弦/分解/鼓节奏数据
 models/             hand_landmarker.task（随站点发布，国内也能加载）
-samples/v2/         压缩后的吉他采样（约 2 MB）
+samples/v2/         压缩后的吉他采样：acoustic 1.5 MB、electric 0.7 MB、nylon 0.9 MB（只先下当前和弦要用的音）
 tests/run.mjs       纯逻辑回归：node tests/run.mjs
 tests/hands.html    真实手部照片跑模型的回归页（素材放 tests/fixtures/，不提交）
 ```
 
-`samples/mg-nylon`、`samples/rjs-electric` 里是原始 WAV（约 184 MB），新版不再加载，仅作为转码源保留。
+`samples/mg-nylon`、`samples/rjs-electric` 里是原始 WAV（约 184 MB），新版不再加载（尼龙吉他用 mg-nylon 转码的 m4a，rjs-electric 已不用），仅作为转码源保留。
 
 ## 技术要点
 
 - 手势：MediaPipe Tasks Vision `HandLandmarker`（固定版本 0.10.21），GPU 推理、`requestVideoFrameCallback` 逐帧驱动；用关节角度判断手指伸直，手歪、手小也能认；连续 1/2/4 帧确认可调。
 - 低延迟：`AudioContext({latencyHint: "interactive"})`；调度器在 Worker 计时、提前 120 ms 排程；换和弦时撤掉还没发声的旧和弦并立刻扫一下新和弦，节拍不乱；每根弦只保留一个发声体。
-- 首屏：不再在页面加载时拉 MediaPipe；模型等点开摄像头才下载；默认音色 0.9 MB，空闲时预取。
+- 首屏：不再在页面加载时拉 MediaPipe；模型等点开摄像头才下载；默认音色先只下当前和弦用到的音，其余后台补齐。
+- 音色真实感：逐弦采样 + 扫弦逐弦错开（越用力越快、手腕加速）、上扫只扫高音 3–4 弦；力度决定亮度（低通，代替缺失的力度层）；每次 ±3 音分和 0–3ms 起点随机，避免“机关枪”；同弦重拨约 0.1 秒自然收音，其它弦继续共鸣；闷音扫弦用真实采样的短促死音；拨片擦弦噪声；木吉他加程序生成的琴箱共鸣冲激响应，电吉他走软削波 + 1x12 音箱频响；吉他和鼓少量送进程序生成的房间混响。混响与琴箱都是旁路发送，直达声不增加延迟。
 
 ## 致谢
 
-- 尼龙吉他采样：MG Soft Nylon Guitar (Lite)，Pianobook / Mike Georgiades
-- 电吉他采样：RJS Guitar
+- 木吉他（钢弦）采样：University of Iowa Electronic Music Studios（Musical Instrument Samples），经 [tonejs-instruments](https://github.com/nbrosowsky/tonejs-instruments)（commit 622c2f1）整理，[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)；本项目转码为 m4a、截断到 4.6 秒
+- 电吉他采样：Karoryfer Samples，经 tonejs-instruments 整理，CC BY 3.0；本项目转码为 m4a
+- 尼龙吉他采样：MG Soft Nylon Guitar (Lite)，Pianobook / Mike Georgiades（沿用 V1；Pianobook 采样的再分发条款需另行确认）
+- 琴箱共鸣、房间混响的冲激响应由代码生成，无第三方素材
 - 钢琴 / 小提琴：gleitz/midi-js-soundfonts（FluidR3_GM）
 - 手势模型：Google MediaPipe
 
