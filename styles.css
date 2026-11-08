@@ -1,142 +1,103 @@
-/* Air Guitar — 使用「个人品牌设计系统 · 深青绿」。
-   下面这段品牌 token 原样来自 ~/Desktop/个人品牌设计系统-深青绿/tokens.css（唯一来源是 tokens.json），不要在这里改色值。
-   规则：组件只用语义变量；琥珀黄只出现在深青绿区域（演奏舞台）；暗色下交互色是薄荷绿。 */
+/* Air Guitar v2 — 简约主题。一套中性色 + 一个暖色强调，深浅色都由 token 驱动。 */
 
-/* 个人品牌设计系统 · 深青绿 — 由 tokens.json 生成，改色请改 tokens.json */
 :root {
-  --bg: #FFFFFF;
-  --surface-subtle: #F3F8F6;
-  --surface-raised: #FFFFFF;
-  --brand: #004643;
-  --on-brand: #FFFFFF;
-  --primary: #004643;
-  --primary-hover: #003936;
-  --primary-active: #002E2B;
-  --on-primary: #FFFFFF;
-  --mint: #ABD1C6;
-  --on-mint: #004643;
-  --mint-subtle: #DFEFEA;
-  --accent: #F9BC60;
-  --accent-hover: #F1AA47;
-  --on-accent: #004643;
-  --text: #172B29;
-  --text-muted: #415651;
-  --link: #004643;
-  --border-control: #536B66;
-  --divider: #DAE4E1;
-  --focus-ring: #004643;
-  --disabled-bg: #E3EAE7;
-  --disabled-text: #7A8A85;
-  --success: #1D7635;
-  --success-bg: #E9F8EA;
-  --warning: #A74900;
-  --warning-bg: #FFF0E9;
-  --error: #BE2323;
-  --error-bg: #FFEFED;
-  --info: #1E65AA;
-  --info-bg: #EBF5FF;
-  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-12: 48px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 16px;
-  --radius-full: 9999px;
-  --shadow-sm: 0 1px 2px rgba(0, 30, 28, 0.08);
-  --shadow-md: 0 6px 20px rgba(0, 30, 28, 0.12);
-  color-scheme: light;
-}
-
-/* 暗色：手动切换 */
-[data-theme="dark"] {
-  --bg: #091918;
-  --surface-subtle: #0F2322;
-  --surface-raised: #162E2C;
-  --primary: #ABD1C6;
-  --primary-hover: #BDE1D6;
-  --primary-active: #96C2B6;
-  --on-primary: #004643;
-  --mint-subtle: #18372F;
-  --text: #E3EEEB;
-  --text-muted: #AEBFBA;
-  --link: #ABD1C6;
-  --border-control: #68807B;
-  --divider: #203836;
-  --focus-ring: #F9BC60;
-  --disabled-bg: #26302E;
-  --disabled-text: #717D7A;
-  --success: #7ACE87;
-  --success-bg: #162C1A;
-  --warning: #FFA475;
-  --warning-bg: #381F12;
-  --error: #FA8880;
-  --error-bg: #3A1D1B;
-  --info: #82B5EF;
-  --info-bg: #15283C;
+  --bg: #0f1012;
+  --surface: #17181b;
+  --surface-2: #1f2024;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --text: #f3f3f1;
+  --muted: #9a9ba1;
+  --faint: #66676d;
+  --accent: #ffb547;
+  --accent-ink: #1a1306;
+  --accent-soft: rgba(255, 181, 71, 0.14);
+  --ok: #5fd39a;
+  --danger: #ff6b5f;
+  --stage: #08090a;
+  --shade: linear-gradient(180deg, rgba(8, 9, 10, 0.55) 0%, rgba(8, 9, 10, 0) 28%, rgba(8, 9, 10, 0) 62%, rgba(8, 9, 10, 0.6) 100%);
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --gutter: 16px;
+  --bar-h: 56px;
+  --sheet-w: 360px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color-scheme: dark;
 }
 
-/* 暗色：跟随系统（未手动指定亮色时） */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #091918;
-    --surface-subtle: #0F2322;
-    --surface-raised: #162E2C;
-    --primary: #ABD1C6;
-    --primary-hover: #BDE1D6;
-    --primary-active: #96C2B6;
-    --on-primary: #004643;
-    --mint-subtle: #18372F;
-    --text: #E3EEEB;
-    --text-muted: #AEBFBA;
-    --link: #ABD1C6;
-    --border-control: #68807B;
-    --divider: #203836;
-    --focus-ring: #F9BC60;
-    --disabled-bg: #26302E;
-    --disabled-text: #717D7A;
-    --success: #7ACE87;
-    --success-bg: #162C1A;
-    --warning: #FFA475;
-    --warning-bg: #381F12;
-    --error: #FA8880;
-    --error-bg: #3A1D1B;
-    --info: #82B5EF;
-    --info-bg: #15283C;
-    color-scheme: dark;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f5f4f1;
+    --surface: #ffffff;
+    --surface-2: #efeee9;
+    --line: rgba(20, 20, 24, 0.08);
+    --line-strong: rgba(20, 20, 24, 0.16);
+    --text: #17181b;
+    --muted: #63646b;
+    --faint: #9a9ba1;
+    --accent: #e48a0f;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(228, 138, 15, 0.12);
+    --stage: #1a1b1e;
+    --shadow: 0 12px 40px rgba(20, 20, 24, 0.12);
+    color-scheme: light;
   }
 }
 
-/* 应用层别名：只是给品牌 token 起个本项目用的名字，不引入新色值 */
+:root[data-theme="light"] {
+  --bg: #f5f4f1;
+  --surface: #ffffff;
+  --surface-2: #efeee9;
+  --line: rgba(20, 20, 24, 0.08);
+  --line-strong: rgba(20, 20, 24, 0.16);
+  --text: #17181b;
+  --muted: #63646b;
+  --faint: #9a9ba1;
+  --accent: #e48a0f;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(228, 138, 15, 0.12);
+  --stage: #1a1b1e;
+  --shadow: 0 12px 40px rgba(20, 20, 24, 0.12);
+  color-scheme: light;
+}
+
+
+/* 新增界面（摄像头入口、新手教程、中性舞台）用到的变量，全部映射回上面这套默认配色 */
 :root {
-  --surface: var(--surface-raised);
-  --surface-2: var(--surface-subtle);
-  --line: var(--divider);
-  --line-strong: var(--border-control);
-  --muted: var(--text-muted);
-  --faint: var(--text-muted);
-  --ok: var(--success);
-  --danger: var(--error);
-  /* 演奏舞台（摄像头画面）用中性近黑，不用品牌深青绿（用户要求画面里不出现主题绿）。
-     这是本应用自己的画面底色，不属于品牌色板。舞台里只用白色和薄荷绿做强调，不用琥珀黄。 */
-  --stage: #0C0D0D;
-  --on-stage: #FFFFFF;
+  --primary: var(--accent);
+  --primary-hover: var(--accent);
+  --primary-active: var(--accent);
+  --on-primary: var(--accent-ink);
+  --mint: var(--accent);
+  --on-mint: var(--accent-ink);
+  --mint-subtle: var(--accent-soft);
+  --surface-raised: var(--surface);
+  --surface-subtle: var(--surface-2);
+  --divider: var(--line);
+  --border-control: var(--line-strong);
+  --text-muted: var(--muted);
+  --focus-ring: var(--accent);
+  --link: var(--accent);
+  --brand: var(--accent);
+  --on-brand: #ffffff;
+  --on-accent: var(--accent-ink);
+  --disabled-bg: var(--surface-2);
+  --disabled-text: var(--faint);
+  --success: var(--ok);
+  --error: var(--danger);
+  --on-stage: #ffffff;
   --stage-muted: rgba(255, 255, 255, 0.74);
-  --stage-highlight: var(--mint);
-  --shade: linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 60%, rgba(0,0,0,0.55) 100%);
-  --shadow: var(--shadow-md);
-  --radius: var(--radius-lg);
-  --radius-sm: var(--radius-md);
-  --gutter: var(--space-4);
-  --bar-h: 56px;
-  --sheet-w: 360px;
-  --font: var(--font-sans);
-  --mono: var(--font-mono);
+  --stage-highlight: var(--accent);
+  --font-sans: var(--font);
+  --font-mono: var(--mono);
+  --space-1: 4px; --space-2: 8px; --space-4: 16px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --shadow-md: var(--shadow);
 }
 
 * { box-sizing: border-box; }
@@ -193,15 +154,15 @@ a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; 
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: -0.01em; }
 .brand-mark {
-  width: 28px; height: 28px; border-radius: var(--radius-md);
-  background: var(--brand);
+  width: 26px; height: 26px; border-radius: 8px;
+  background: var(--accent);
   position: relative;
 }
 .brand-mark::before, .brand-mark::after {
-  content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 2px; background: var(--on-brand);
+  content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 2px; background: var(--accent-ink);
 }
-.brand-mark::before { top: 10px; }
-.brand-mark::after { top: 16px; right: 12px; box-shadow: 10px 0 0 0 var(--accent); width: 6px; }
+.brand-mark::before { top: 9px; }
+.brand-mark::after { top: 15px; right: 10px; }
 .brand-name { font-size: 16px; }
 
 .status {

@@ -1,10 +1,10 @@
 import {
   KEYS, PROGRESSION_PRESETS, allChordOptions, bindingsFromProgression, defaultBindings,
   keyInterval, normalizeChord, splitProgression, transposeChord, transposeProgression, voiceChord,
-} from "./theory.js?v=2.4";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.4";
-import { Engine, INSTRUMENTS } from "./audio.js?v=2.4";
-import { classifyHand, GestureStabilizer } from "./gesture.js?v=2.4";
+} from "./theory.js?v=2.5";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.5";
+import { Engine, INSTRUMENTS } from "./audio.js?v=2.5";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=2.5";
 
 const $ = (sel) => document.querySelector(sel);
 const STORE_KEY = "airGuitar.v2";
@@ -668,7 +668,7 @@ async function startCamera() {
   el.introCam.querySelector("span").textContent = "正在打开…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js?v=2.4");
+      const { HandTracker } = await import("./hands.js?v=2.5");
       tracker = new HandTracker(el.video, {
         onResult: onHands,
         onStatus: (s) => {

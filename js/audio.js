@@ -4,8 +4,8 @@
 // 2. 换和弦时取消尚未发声的旧和弦、重排新和弦，并按需立刻扫一下，所以既跟手又不乱拍。
 // 3. 每根弦只保留一个发声体：新音会切掉同弦旧音，像真吉他一样，也让同时发声数有上限。
 
-import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=2.4";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.4";
+import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=2.5";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.5";
 
 export const INSTRUMENTS = [
   { id: "acoustic", name: "木吉他（钢弦）", kind: "sampler" },
