@@ -20,3 +20,7 @@ Thumbs.db
 node_modules/
 .env
 *.log
+
+# 本地测试素材（MediaPipe 官方示例图，不发布）
+tests/fixtures/
+samples/v2/fx/x*.m4a

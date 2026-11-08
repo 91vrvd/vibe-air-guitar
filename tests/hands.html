@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>手势模型回归</title>
+<body style="font:14px system-ui;background:#111;color:#eee">
+<pre id="out">running…</pre>
+<script type="module">
+// 本地回归：用真实手部照片跑 HandLandmarker，再用 classifyHand 计数。图片来自 MediaPipe 官方测试素材（未提交到仓库）。
+import { classifyHand } from "../js/gesture.js";
+const V = "0.10.21";
+const base = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${V}`;
+const out = document.querySelector("#out");
+const mod = await import(`${base}/vision_bundle.mjs`);
+const fileset = await mod.FilesetResolver.forVisionTasks(`${base}/wasm`);
+const t0 = performance.now();
+const lm = await mod.HandLandmarker.createFromOptions(fileset, {
+  baseOptions: { modelAssetPath: new URL("../models/hand_landmarker.task", location.href).href, delegate: "GPU" },
+  runningMode: "IMAGE", numHands: 2,
+});
+const loadMs = performance.now() - t0;
+const cases = { "pointing_up.jpg": 1, "victory.jpg": 2, "fist.jpg": 0, "thumb_up.jpg": null, "woman_hands.jpg": "any" };
+const rows = [];
+for (const [file, want] of Object.entries(cases)) {
+  const img = new Image();
+  img.src = `fixtures/${file}`;
+  await img.decode();
+  const s = performance.now();
+  const r = lm.detect(img);
+  const ms = performance.now() - s;
+  const counts = r.landmarks.map((l) => classifyHand(l, img.naturalWidth / img.naturalHeight).count);
+  const ok = want === "any" ? counts.length > 0 : counts[0] === want;
+  rows.push({ file, want, got: counts, ok, ms: +ms.toFixed(1) });
+}
+window.__result = { loadMs: Math.round(loadMs), rows };
+out.textContent = JSON.stringify(window.__result, null, 2);
+</script>

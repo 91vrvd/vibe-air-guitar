@@ -2,178 +2,245 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vibe Air Guitar</title>
-  <link rel="stylesheet" href="./styles.css?v=23">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1012">
+  <meta name="description" content="用摄像头手势弹空气吉他：伸出 1–5 根手指切换和弦，伴奏跟着手走。纯浏览器运行。">
+  <title>Air Guitar · 空气吉他</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23ffb547'/%3E%3Cpath d='M9 22l14-12M12 25c-3 0-5-2-5-5l4-1 2 2-1 4zM21 9l2-2 2 2-2 2' stroke='%23141414' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <script>
+    // 主题尽早落地，避免闪白
+    try {
+      const saved = JSON.parse(localStorage.getItem("airGuitar.v2") || "{}").theme;
+      if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+    } catch {}
+  </script>
+  <link rel="stylesheet" href="./styles.css?v=2.0.0">
 </head>
 <body>
-  <main class="app">
-    <section class="stage">
-      <div class="video-wrap fx-off">
-        <video id="camera" autoplay muted playsinline></video>
-        <div class="camera-fallback" id="cameraFallback">开启摄像头，摆 1-5 号手势开弹</div>
-        <canvas id="handCanvas" aria-hidden="true"></canvas>
-        <canvas id="faceCanvas" aria-hidden="true"></canvas>
-        <div class="effects-layer" id="effectsLayer" aria-hidden="true"></div>
-        <div class="gesture-badge">
-          <span id="gestureName">未选择手势</span>
-          <strong id="activeChord">--</strong>
-          <em id="detectStatus">手势识别就绪，松手即停</em>
+  <div class="app" id="app">
+    <header class="bar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Air Guitar</span>
+      </div>
+      <div class="status" id="status" role="status" aria-live="polite">
+        <i class="status-dot"></i><span id="statusText">摄像头未开启</span>
+      </div>
+      <div class="bar-actions">
+        <button class="icon-btn" id="camBtn" type="button" aria-label="开启摄像头" title="摄像头 (C)">
+          <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 10.5l4-2.5v8l-4-2.5"/><path class="slash" d="M3 3l18 18"/></svg>
+        </button>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="切换深浅色" title="深浅色">
+          <svg viewBox="0 0 24 24"><path class="sun" d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4"/><circle class="sun" cx="12" cy="12" r="4"/><path class="moon" d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+        </button>
+        <button class="icon-btn" id="helpBtn" type="button" aria-label="玩法说明" title="玩法说明">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.5"/><path d="M12 16.8v.2"/></svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" type="button" aria-label="设置" aria-expanded="false" aria-controls="sheet" title="设置 (S)">
+          <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="stage" id="stage">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay" aria-hidden="true"></canvas>
+      <div class="stage-shade" aria-hidden="true"></div>
+
+      <div class="hud" id="hud">
+        <div class="hud-label" id="hudLabel">当前和弦</div>
+        <div class="hud-chord" id="hudChord">—</div>
+        <div class="hud-meta" id="hudMeta">伸出 1–5 根手指</div>
+        <div class="hud-next" id="hudNext" hidden></div>
+      </div>
+
+      <div class="beats" id="beats" aria-hidden="true"></div>
+
+      <button class="air-drum" id="airDrum" type="button" aria-pressed="true" title="把食指尖停在这里 0.3 秒也能开关鼓">
+        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="8" rx="8" ry="3"/><path d="M4 8v7c0 1.7 3.6 3 8 3s8-1.3 8-3V8"/><path d="M8 3l3 4M16 3l-3 4"/></svg>
+        <span>鼓</span>
+        <i class="air-drum-progress"></i>
+      </button>
+
+      <div class="perf" id="perf" hidden></div>
+
+      <section class="intro" id="intro" aria-labelledby="introTitle">
+        <div class="intro-card">
+          <h1 id="introTitle">伸出手指，弹空气吉他</h1>
+          <p class="intro-lead">打开摄像头，用 1 到 5 根手指切换和弦，伴奏跟着你的手走。没有摄像头也能用下方按键或数字键 1–5 来弹。</p>
+          <ol class="guide" id="guide"></ol>
+          <div class="intro-actions">
+            <button class="btn primary" id="introCam" type="button">开启摄像头</button>
+            <button class="btn ghost" id="introSkip" type="button">先用按键试试</button>
+          </div>
+          <p class="fine">画面只在你的设备上处理，不上传。握拳 = 静音；只竖大拇指不会触发。</p>
         </div>
-        <div class="live-gesture-palette" id="liveGesturePalette"></div>
-        <div class="beat-meter" id="beatMeter"></div>
-        <div class="drum-touch-zone active" id="drumTouchZone" aria-label="手势触控鼓">🥁</div>
-        <label class="drum-touch-size-control" aria-label="鼓触控区大小">
-          <span>鼓区</span>
-          <input id="drumTouchSize" type="range" min="40" max="180" value="80">
-        </label>
-        <div class="theme-switch" id="themeSwitch" aria-label="主题切换">
-          <button type="button" data-theme-choice="light" aria-label="亮色主题">☀️</button>
-          <button type="button" data-theme-choice="dark" aria-label="暗色主题">🌙</button>
+      </section>
+
+      <div class="toast" id="toast" role="alert" hidden></div>
+    </main>
+
+    <section class="dock" aria-label="演奏">
+      <div class="pads" id="pads"></div>
+      <div class="transport">
+        <button class="play" id="playBtn" type="button" aria-pressed="false" title="开始/停止伴奏 (空格)">
+          <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+          <svg class="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+          <span id="playLabel">开始伴奏</span>
+        </button>
+        <div class="stepper" role="group" aria-label="速度">
+          <button type="button" id="bpmDown" aria-label="减慢">−</button>
+          <label class="stepper-value"><input id="bpmInput" type="number" inputmode="numeric" min="50" max="180" value="96" aria-label="BPM"><small>BPM</small></label>
+          <button type="button" id="bpmUp" aria-label="加快">+</button>
         </div>
+        <div class="seg seg-mode" role="radiogroup" aria-label="伴奏方式" id="modeSeg">
+          <button type="button" role="radio" data-value="gesture" aria-checked="true">手势换和弦</button>
+          <button type="button" role="radio" data-value="follow" aria-checked="false">自动走谱</button>
+        </div>
+        <button class="chip" id="rhythmChip" type="button" title="换节奏型">
+          <svg viewBox="0 0 24 24"><path d="M4 12h3l2-6 3 12 3-9 2 3h3"/></svg>
+          <span id="rhythmChipText">节奏</span>
+        </button>
       </div>
     </section>
 
-    <button id="settingsFab" class="settings-fab" type="button" aria-label="打开设置">⚙️</button>
-    <div id="controlsOverlay" class="controls-overlay"></div>
-    <aside class="controls">
-      <header>
-        <p>本地浏览器版</p>
-        <h1>Vibe Air Guitar</h1>
-      </header>
-
-      <div class="panel">
-        <div class="row">
-          <button id="cameraBtn" class="secondary">开启摄像头识别</button>
-          <button id="playBtn">开始伴奏</button>
-        </div>
-        <div class="row single">
-          <button id="autoBtn" class="secondary">松手即停</button>
-        </div>
-        <label>
-          BPM
-          <input id="bpm" type="range" min="60" max="140" value="92">
-          <span id="bpmValue">92</span>
-        </label>
-        <label>
-          调性
-          <select id="keySelect">
-            <option value="C">C</option>
-            <option value="C#">C#</option>
-            <option value="D">D</option>
-            <option value="D#">D#</option>
-            <option value="E">E</option>
-            <option value="F">F</option>
-            <option value="F#">F#</option>
-            <option value="G">G</option>
-            <option value="G#">G#</option>
-            <option value="A">A</option>
-            <option value="A#">A#</option>
-            <option value="B">B</option>
-          </select>
-          <span id="keyLabel">C调</span>
-        </label>
-        <label>
-          音色
-          <select id="instrumentSelect">
-            <option value="guitar">吉他</option>
-            <option value="electric">电吉他</option>
-            <option value="piano">钢琴</option>
-            <option value="tinbox">半岛铁盒</option>
-            <option value="glassbell">玻璃铃</option>
-            <option value="celeste">星光琴</option>
-            <option value="violin">小提琴</option>
-          </select>
-        </label>
-        <label>
-          Capo
-          <input id="capo" type="range" min="0" max="5" value="0">
-          <span id="capoValue">0</span>
-        </label>
+    <aside class="sheet" id="sheet" aria-label="设置" aria-hidden="true">
+      <div class="sheet-head">
+        <h2>设置</h2>
+        <button class="icon-btn" id="sheetClose" type="button" aria-label="关闭设置">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
       </div>
-
-      <div class="panel chord-panel">
-        <h2>和弦谱</h2>
-        <textarea id="progressionInput" rows="2">C G Am F</textarea>
-        <div class="chord-picker">
-          <div class="chord-picker-head">
-            <span>单个和弦快捷添加</span>
-            <button id="clearProgressionBtn" class="clear-progression-btn" type="button" aria-label="清空和弦谱">×</button>
+      <div class="sheet-body">
+        <section class="group">
+          <h3>声音</h3>
+          <div class="field">
+            <label for="instrument">音色</label>
+            <select id="instrument"></select>
           </div>
-          <div class="quick-chord-rows" id="quickChordRows"></div>
-        </div>
-        <label class="stacked-label preset-label">
-          📋 预制和弦模板
-          <select id="progressionPresetSelect"></select>
-        </label>
-        <div class="progression-strip" id="progressionStrip"></div>
-        <p class="hint">输入真实和弦名，系统会反查应该摆几号国际数字手势。</p>
-      </div>
-
-      <div class="panel">
-        <h2>节奏型</h2>
-        <div class="rhythm-modules">
-          <section class="rhythm-card">
-            <h3>🥁 鼓节奏</h3>
-            <label class="toggle-row"><input id="drumToggle" type="checkbox" checked> 鼓开关</label>
-            <label class="stacked-label">
-              鼓节奏型
-              <select id="drumRhythmSelect"></select>
-            </label>
-          </section>
-          <section class="rhythm-card">
-            <h3>🎸 吉他弹奏</h3>
-            <label class="stacked-label">
-              吉他节奏型
-              <select id="rhythmSelect"></select>
-            </label>
-            <div class="toggle-list">
-              <label><input id="muteToggle" type="checkbox"> 闷音 x</label>
-              <label><input id="spreadToggle" type="checkbox" checked> 扫弦 spread</label>
-              <label><input id="randomToggle" type="checkbox" checked> <span id="humanizeLabel">💡 人性化演奏</span></label>
-              <label><input id="drumTouchToggle" type="checkbox" checked> 🎛️ 手势触控鼓</label>
+          <div class="field">
+            <span class="field-label">弹法</span>
+            <div class="seg" role="radiogroup" id="styleSeg">
+              <button type="button" role="radio" data-value="strum">扫弦</button>
+              <button type="button" role="radio" data-value="arp">分解</button>
+              <button type="button" role="radio" data-value="custom">自定义</button>
             </div>
-            <label class="stacked-label">
-              和弦切换延迟
-              <input id="chordSwitchDelay" type="range" min="0" max="800" value="150" step="10">
-              <span id="chordSwitchDelayValue">150ms</span>
-            </label>
-          </section>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h2>演奏方式</h2>
-        <div class="segmented" id="patternButtons"></div>
-        <div id="customMelodySection" class="custom-melody-section">
-          <p class="hint">编辑自定义走向：先录入，再保存，循环时自动套用根音换算。</p>
-          <div class="custom-string-grid" id="customStringButtons"></div>
-          <div class="custom-progression-row">
-            <div id="customProgressionDisplay" class="custom-progression-tags"></div>
-            <span id="customRootHint" class="custom-root-hint">根音自适应已开启</span>
           </div>
-          <div class="custom-actions">
-            <button id="customEditBtn" class="secondary">编辑</button>
-            <button id="customSaveBtn" class="secondary">保存</button>
-            <button id="customClearBtn" class="secondary">清空</button>
+          <div class="field" id="strumField">
+            <label for="strumPattern">扫弦节奏</label>
+            <select id="strumPattern"></select>
           </div>
-          <p class="hint" id="customMelodyHint">选择“自定义”演奏方式后，任何音色都可用自定义走向，根音弦自动随和弦变化。</p>
-        </div>
-      </div>
+          <div class="field" id="arpField" hidden>
+            <label for="arpPattern">分解方式</label>
+            <select id="arpPattern"></select>
+          </div>
+          <div class="custom" id="customField" hidden>
+            <div class="custom-steps" id="customSteps" aria-live="polite"></div>
+            <div class="custom-keys" id="customKeys"></div>
+            <div class="custom-actions">
+              <button type="button" class="btn small ghost" id="customUndo">退一步</button>
+              <button type="button" class="btn small ghost" id="customReset">恢复默认</button>
+            </div>
+            <p class="hint">点弦号录入走向（R = 根音弦，会随和弦自动换弦），最多 16 步，每步一个八分音符。</p>
+          </div>
+          <div class="field range">
+            <label for="guitarVol">吉他音量</label>
+            <input id="guitarVol" type="range" min="0" max="100" value="85">
+          </div>
+          <div class="toggles">
+            <label class="toggle"><input type="checkbox" id="humanize"><span></span>人性化（力度和时值微随机）</label>
+            <label class="toggle"><input type="checkbox" id="spread"><span></span>扫弦拉开（逐弦有先后）</label>
+            <label class="toggle"><input type="checkbox" id="palmMute"><span></span>手掌闷音（短促）</label>
+          </div>
+        </section>
 
-      <div class="panel compact binding-panel">
-        <h2>当前手势绑定</h2>
-        <div id="mappingText" class="gesture-binding-list"></div>
-        <p class="hint">切换调性会重置手指绑定；手动选择后会立刻用于播放。</p>
-        <p>手在镜头里才响；只识别 1-5，减少误触发。音色会跟随当前手势和弦实时切换。</p>
+        <section class="group">
+          <h3>鼓</h3>
+          <div class="toggles">
+            <label class="toggle"><input type="checkbox" id="drumsOn"><span></span>鼓伴奏</label>
+            <label class="toggle"><input type="checkbox" id="airDrumOn"><span></span>画面里的「鼓」开关（食指停留切换）</label>
+            <label class="toggle"><input type="checkbox" id="countIn"><span></span>开始前数一小节预备拍</label>
+          </div>
+          <div class="field">
+            <label for="drumPattern">鼓型</label>
+            <select id="drumPattern"></select>
+          </div>
+          <div class="field range">
+            <label for="drumVol">鼓音量</label>
+            <input id="drumVol" type="range" min="0" max="100" value="60">
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>调与和弦</h3>
+          <div class="field-row">
+            <div class="field">
+              <label for="keySelect">调</label>
+              <select id="keySelect"></select>
+            </div>
+            <div class="field">
+              <label for="capo">变调夹</label>
+              <select id="capo"></select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="preset">常用和弦走向</label>
+            <select id="preset"></select>
+          </div>
+          <div class="field">
+            <label for="progression">和弦谱（自动走谱按这个顺序，每个和弦一小节）</label>
+            <input id="progression" type="text" autocomplete="off" spellcheck="false" placeholder="例如 C G Am F">
+          </div>
+          <div class="field">
+            <span class="field-label">每个和弦停留</span>
+            <div class="seg" role="radiogroup" id="barsSeg">
+              <button type="button" role="radio" data-value="1">1 小节</button>
+              <button type="button" role="radio" data-value="2">2 小节</button>
+            </div>
+          </div>
+          <div class="bindings" id="bindings"></div>
+          <p class="hint">改和弦谱会按调内级数自动分配手指；也可以单独给每根手指换和弦，或上传一段自己的音频。</p>
+        </section>
+
+        <section class="group">
+          <h3>手势</h3>
+          <div class="field">
+            <span class="field-label">松手后</span>
+            <div class="seg" role="radiogroup" id="holdSeg">
+              <button type="button" role="radio" data-value="stop">立即停</button>
+              <button type="button" role="radio" data-value="hold">保持和弦（握拳停）</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">识别手感</span>
+            <div class="seg" role="radiogroup" id="stabilitySeg">
+              <button type="button" role="radio" data-value="1">最跟手</button>
+              <button type="button" role="radio" data-value="2">均衡</button>
+              <button type="button" role="radio" data-value="4">最稳</button>
+            </div>
+          </div>
+          <div class="toggles">
+            <label class="toggle"><input type="checkbox" id="mirror"><span></span>镜像画面（像照镜子）</label>
+            <label class="toggle"><input type="checkbox" id="skeleton"><span></span>显示手部骨架</label>
+            <label class="toggle"><input type="checkbox" id="perfOn"><span></span>显示帧率和延迟</label>
+          </div>
+        </section>
+
+        <section class="group group-last">
+          <div class="shortcuts">
+            <span><kbd>1</kbd>–<kbd>5</kbd> 和弦</span>
+            <span><kbd>0</kbd> 静音</span>
+            <span><kbd>空格</kbd> 伴奏</span>
+            <span><kbd>↑</kbd><kbd>↓</kbd> 速度</span>
+            <span><kbd>C</kbd> 摄像头</span>
+          </div>
+          <button type="button" class="btn small ghost danger" id="resetAll">恢复全部默认设置</button>
+        </section>
       </div>
     </aside>
-  </main>
+    <div class="scrim" id="scrim" hidden></div>
+  </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
-  <script src="./app.js?v=23"></script>
+  <script type="module" src="./js/main.js?v=2.0.0"></script>
 </body>
 </html>
