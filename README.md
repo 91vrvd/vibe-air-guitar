@@ -1,6 +1,8 @@
-# 🎸 Air Guitar · 空气吉他
+# 空气吉他 / Vibe Air Guitar
 
 用摄像头手势弹空气吉他：伸出 1–5 根手指切换和弦，伴奏跟着手走。纯浏览器运行，画面不上传。
+
+**English:** A browser-based air guitar. Hold up 1–5 fingers to pick a chord; sampled guitars and rhythm patterns follow your hand. Everything runs locally in the browser.
 
 👉 在线体验：**https://91vrvd.github.io/vibe-air-guitar/**
 
