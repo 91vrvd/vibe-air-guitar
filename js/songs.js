@@ -68,6 +68,39 @@ That saved a wretch like [D]me
 I [G]once was lost, but [C]now am [G]found
 Was [Em]blind, but [D]now I [G]see`,
   },
+  // 根据用户提供的曲谱截图整理的和弦片段；不收录原谱图片或歌词。
+  {
+    id: "p_rose_photo",
+    style: "folk",
+    title: "截图和弦：玫瑰（前奏与主歌片段）",
+    key: "C",
+    text: `拍号: 4/4
+| Fmaj7 G | C Am | Fmaj7 G | C E |
+| Fmaj7 G | C Am | Fmaj7 G | Am |
+| Fmaj7 | G | C E | Am | Fmaj7 | G | C E |`,
+  },
+  {
+    id: "p_meet_photo",
+    style: "ballad",
+    title: "截图和弦：遇见（前奏与主歌片段）",
+    key: "C",
+    bpm: 68,
+    text: `拍号: 4/4
+变调夹: 2
+| C | G | Am | Fmaj7 G | C | C G | Am |
+| Fmaj7 G | C | C G | Am | Fmaj7 G | C |
+| Fmaj7 G | C | Fmaj7 G | C |`,
+  },
+  {
+    id: "p_oldboy_photo",
+    style: "folk",
+    title: "截图和弦：老男孩（前奏与主歌片段）",
+    key: "C",
+    text: `拍号: 4/4
+| C | Fm | C | Fm | C G Am Em F | Fm | C |
+| G C G | C | G | Am | Em | F | C |
+| Dm7 | G | C | G | Am | Em | F | C |`,
+  },
   { id: "p_pop", style: "pop", title: "和弦练习：流行 1-5-6-4（C G Am F）", key: "C", text: "C G Am F" },
   { id: "p_canon", style: "ballad", title: "和弦练习：卡农（C G Am Em F C F G）", key: "C", text: "C G Am Em F C F G" },
   { id: "p_50s", style: "folk", title: "和弦练习：50 年代（C Am F G）", key: "C", text: "C Am F G" },
