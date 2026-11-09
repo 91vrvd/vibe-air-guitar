@@ -68,38 +68,51 @@ That saved a wretch like [D]me
 I [G]once was lost, but [C]now am [G]found
 Was [Em]blind, but [D]now I [G]see`,
   },
-  // 根据用户提供的曲谱截图整理的和弦片段；不收录原谱图片或歌词。
+  // 根据用户提供的曲谱截图整理的可见片段；不收录原谱图片。
   {
     id: "p_rose_photo",
     style: "folk",
-    title: "截图和弦：玫瑰（前奏与主歌片段）",
+    title: "截图曲谱：玫瑰（前奏与主歌片段）",
     key: "C",
     text: `拍号: 4/4
-| Fmaj7 G | C Am | Fmaj7 G | C E |
+| [Fmaj7]前奏（无歌词）[G] | [C] [Am] | [Fmaj7] [G] | [C] [E] |
 | Fmaj7 G | C Am | Fmaj7 G | Am |
-| Fmaj7 | G | C E | Am | Fmaj7 | G | C E |`,
+| [Fmaj7]你说你想在[G]海边买一所 | [C]房子 |
+| [Fmaj7]转眼两年[G]时间已过 | [C]去 |
+| [Fmaj7]和你可爱的[G]松狮一起住在 | [C]那里 |
+| [Am]你会当一个心情杂货铺的 | [Fmaj7]老板娘 |
+| [G]你说你最近爱上了 | [C]旅行 |`,
   },
   {
     id: "p_meet_photo",
     style: "ballad",
-    title: "截图和弦：遇见（前奏与主歌片段）",
+    title: "截图曲谱：遇见（前奏与主歌片段）",
     key: "C",
     bpm: 68,
     text: `拍号: 4/4
 变调夹: 2
-| C | G | Am | Fmaj7 G | C | C G | Am |
-| Fmaj7 G | C | C G | Am | Fmaj7 G | C |
-| Fmaj7 G | C | Fmaj7 G | C |`,
+| [C]前奏（无歌词） | [G] | [Am] | [Fmaj7] [G] | [C] | [C] [G] | [Am] |
+| [C]听见冬天[G]的离 | [Am]开 |
+| [Fmaj7]我在某年某月[G]醒过 | [C]来 |
+| [C]我想我等我期[G]待 | [Am]未来却不能因[Fmaj7]此安[G]排 |
+| [C]阴天傍晚车窗[G]外 | [Am]未来有一个人在[Fmaj7]等[G]待 |
+| [C]向左向右向前[G]看 | [Am]爱要拐几个弯[Fmaj7]才[G]来 |
+| [Fmaj7]我遇见谁[G]会有怎样的对 | [C]白 |
+| [Fmaj7]我等的人[G]他在多远的未 | [C]来 |`,
   },
   {
     id: "p_oldboy_photo",
     style: "folk",
-    title: "截图和弦：老男孩（前奏与主歌片段）",
+    title: "截图曲谱：老男孩（前奏与主歌片段）",
     key: "C",
     text: `拍号: 4/4
-| C | Fm | C | Fm | C G Am Em F | Fm | C |
-| G C G | C | G | Am | Em | F | C |
-| Dm7 | G | C | G | Am | Em | F | C |`,
+| [C]前奏（无歌词） | [Fm] | [C] | [Fm] | [C] [G] [Am] [Em] [F] | [Fm] | [C] |
+| [C]那是我日夜思念[G]深深爱着的人 | [Am]啊 |
+| [Em]到底我该如何表达 | [F]她会接受我吗 |
+| [C]也许永远都不会跟[G]她说出那句话 |
+| [Am]注定我要浪迹天 | [Em]涯 |
+| [F]梦想总是遥不可及[G]是不是应该放弃 |
+| [C]青春如同奔流的江河 | [G]一去不回来不及道别 |`,
   },
   { id: "p_pop", style: "pop", title: "和弦练习：流行 1-5-6-4（C G Am F）", key: "C", text: "C G Am F" },
   { id: "p_canon", style: "ballad", title: "和弦练习：卡农（C G Am Em F C F G）", key: "C", text: "C G Am Em F C F G" },

@@ -1,7 +1,7 @@
 import {
   allChordOptions, bindingsFromProgression, defaultBindings, normalizeChord, transposeChord, voiceChord,
 } from "./theory.js?v=3.3";
-import { BUILTIN_SONGS, STYLES, parseSheet, parseRhythm, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.3";
+import { BUILTIN_SONGS, STYLES, parseSheet, parseRhythm, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.4";
 import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.3";
 import { Engine, INSTRUMENTS } from "./audio.js?v=3.3";
 import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.3";
@@ -601,9 +601,10 @@ function fillSelects() {
 function fillSongs() {
   const mine = settings.customSongs.map((x) => `<option value="${escapeHtml(x.id)}">我导入的：${escapeHtml(x.title)}</option>`).join("");
   const songs = BUILTIN_SONGS.filter((x) => !x.id.startsWith("p_")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
-  const practice = BUILTIN_SONGS.filter((x) => x.id.startsWith("p_")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
+  const photos = BUILTIN_SONGS.filter((x) => x.id.endsWith("_photo")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
+  const practice = BUILTIN_SONGS.filter((x) => x.id.startsWith("p_") && !x.id.endsWith("_photo")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
   el.songSelect.innerHTML = (mine ? `<optgroup label="我导入的歌">${mine}</optgroup>` : "")
-    + `<optgroup label="内置歌曲（公有领域）">${songs}</optgroup><optgroup label="和弦练习">${practice}</optgroup>`;
+    + `<optgroup label="内置歌曲（公有领域）">${songs}</optgroup><optgroup label="截图曲谱">${photos}</optgroup><optgroup label="和弦练习">${practice}</optgroup>`;
   el.songSelect.value = settings.songId;
 }
 
