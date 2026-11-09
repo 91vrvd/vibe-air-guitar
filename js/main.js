@@ -1,10 +1,10 @@
 import {
-  KEYS, PROGRESSION_PRESETS, allChordOptions, bindingsFromProgression, defaultBindings,
-  keyInterval, normalizeChord, splitProgression, transposeChord, transposeProgression, voiceChord,
-} from "./theory.js?v=2.5";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.5";
-import { Engine, INSTRUMENTS } from "./audio.js?v=2.5";
-import { classifyHand, GestureStabilizer } from "./gesture.js?v=2.5";
+  allChordOptions, bindingsFromProgression, defaultBindings, normalizeChord, transposeChord, voiceChord,
+} from "./theory.js?v=2.9";
+import { BUILTIN_SONGS, parseSheet, guessKey, topChords } from "./songs.js?v=2.9";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.9";
+import { Engine, INSTRUMENTS } from "./audio.js?v=2.9";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=2.9";
 
 const $ = (sel) => document.querySelector(sel);
 const STORE_KEY = "airGuitar.v2";
@@ -13,28 +13,28 @@ const FINGER_NAMES = { 1: "食指", 2: "食指+中指", 3: "三指", 4: "四指�
 
 // ---------------- 设置 ----------------
 const DEFAULTS = {
-  key: "C",
-  capo: 0,
-  bpm: 96,
+  transpose: 0, // 升降调（半音）
+  bpm: 88,
   instrument: "acoustic",
   style: "strum",
-  strumId: "folk_soft",
+  strumId: "folk",
   arpId: "classic",
   customSteps: DEFAULT_CUSTOM_STEPS.slice(),
   drumId: "standard",
   drumsOn: true,
   airDrum: true,
+  airDrumSize: 120,
   countIn: false,
   hold: false,
-  follow: false,
+  mode: "free", // free 自由弹 / song 跟谱弹唱 / auto 自动走谱
   barsPerChord: 1,
-  progression: "C G Am F",
+  songId: "p_pop",
+  customSongs: [], // 用户导入的文字谱 {id, title, text}
   bindings: defaultBindings("C"),
   guitarVol: 85,
   drumVol: 60,
   humanize: true,
   spread: true,
-  palmMute: false,
   stability: 2,
   mirror: true,
   skeleton: true,
@@ -51,7 +51,17 @@ function loadSettings() {
     for (const f of FINGERS) merged.bindings[f] = normalizeChord(merged.bindings[f]) || DEFAULTS.bindings[f];
     if (!INSTRUMENTS.some((i) => i.id === merged.instrument)) merged.instrument = DEFAULTS.instrument;
     if (!Array.isArray(merged.customSteps)) merged.customSteps = DEFAULTS.customSteps.slice();
-    merged.bpm = clamp(Number(merged.bpm) || 96, 50, 180);
+    merged.bpm = clamp(Number(merged.bpm) || 88, 50, 180);
+    // 旧版本设置迁移
+    if (saved.follow && !saved.mode) merged.mode = "auto";
+    if (!["free", "song", "auto"].includes(merged.mode)) merged.mode = "free";
+    if (!STRUM_PATTERNS.some((p) => p.id === merged.strumId)) merged.strumId = DEFAULTS.strumId;
+    if (!ARP_PATTERNS.some((p) => p.id === merged.arpId)) merged.arpId = DEFAULTS.arpId;
+    if (!DRUM_PATTERNS.some((p) => p.id === merged.drumId)) merged.drumId = DEFAULTS.drumId;
+    if (!Array.isArray(merged.customSongs)) merged.customSongs = [];
+    merged.transpose = clamp(Math.round(Number(merged.transpose) || 0), -6, 6);
+    merged.airDrumSize = clamp(Number(merged.airDrumSize) || 120, 60, 220);
+    delete merged.key; delete merged.capo; delete merged.progression; delete merged.follow; delete merged.palmMute;
     return merged;
   } catch {
     return structuredClone(DEFAULTS);
@@ -83,6 +93,9 @@ const state = {
   lastLandmarks: null,
   airDrumSince: 0,
   airDrumCooldown: 0,
+  airDrumInside: false,
+  songPos: 0, // 跟谱弹唱：当前第几个和弦
+  autoPos: -1, // 自动走谱：正在响的第几个和弦
   ctaFull: !settings.introSeen, // 摄像头入口：大卡片 / 画面中间的按钮
 };
 
@@ -106,9 +119,11 @@ const el = {
   strumField: $("#strumField"), arpField: $("#arpField"), customField: $("#customField"),
   customSteps: $("#customSteps"), customKeys: $("#customKeys"), customUndo: $("#customUndo"), customReset: $("#customReset"),
   guitarVol: $("#guitarVol"), drumVol: $("#drumVol"),
-  humanize: $("#humanize"), spread: $("#spread"), palmMute: $("#palmMute"),
-  drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), countIn: $("#countIn"), drumPattern: $("#drumPattern"),
-  keySelect: $("#keySelect"), capo: $("#capo"), preset: $("#preset"), progression: $("#progression"),
+  humanize: $("#humanize"), spread: $("#spread"),
+  drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), airDrumSize: $("#airDrumSize"), countIn: $("#countIn"), drumPattern: $("#drumPattern"),
+  songSelect: $("#songSelect"), songTitle: $("#songTitle"), songText: $("#songText"), songImport: $("#songImport"), songDelete: $("#songDelete"),
+  importBox: $("#importBox"), transpose: $("#transpose"),
+  lyrics: $("#lyrics"), lyricNow: $("#lyricNow"), lyricNext: $("#lyricNext"),
   barsSeg: $("#barsSeg"), bindings: $("#bindings"),
   holdSeg: $("#holdSeg"), stabilitySeg: $("#stabilitySeg"),
   mirror: $("#mirror"), skeleton: $("#skeleton"), perfOn: $("#perfOn"), resetAll: $("#resetAll"),
@@ -125,7 +140,37 @@ function fingersGlyph(n) {
     return `<i class="${up ? "up" : ""}"></i>`;
   }).join("")}</span>`;
 }
-function soundingName(shape) { return transposeChord(shape, settings.capo); }
+function soundingName(shape) { return transposeChord(shape, settings.transpose); }
+
+// ---------------- 歌曲 ----------------
+let song = null; // {id, title, key, lines, sequence}
+function allSongs() { return [...settings.customSongs, ...BUILTIN_SONGS]; }
+
+function loadSong(id, { rebind = true } = {}) {
+  const src = allSongs().find((x) => x.id === id) || BUILTIN_SONGS.find((x) => x.id === DEFAULTS.songId);
+  const parsed = parseSheet(src.text);
+  song = { ...src, ...parsed, key: src.key || guessKey(parsed.sequence) };
+  if (!song.sequence.length) song.sequence = [{ name: "C", line: 0 }];
+  settings.songId = song.id;
+  state.songPos = 0;
+  state.autoPos = -1;
+  if (rebind) settings.bindings = bindingsFromProgression(topChords(song.sequence, 5), song.key);
+}
+
+function songChordAt(pos) {
+  const item = song.sequence[((pos % song.sequence.length) + song.sequence.length) % song.sequence.length];
+  return chordObj(item.name);
+}
+
+function setSongPos(pos) {
+  const n = song.sequence.length;
+  state.songPos = ((pos % n) + n) % n;
+}
+
+function chordObj(shape, finger = null) {
+  const name = soundingName(shape);
+  return { shape, name, voicing: voiceChord(name), custom: finger ? customAudio.get(finger)?.buffer || null : null, finger };
+}
 
 let toastTimer = null;
 function toast(text, ms = 3200) {
@@ -146,9 +191,10 @@ function setSeg(seg, value) {
 
 function chordFor(finger) {
   if (!finger) return null;
+  if (settings.mode === "song") return songChordAt(state.songPos);
   const shape = settings.bindings[finger];
   if (!shape) return null;
-  return { shape, name: soundingName(shape), voicing: voiceChord(shape), custom: customAudio.get(finger)?.buffer || null, finger };
+  return chordObj(shape, finger);
 }
 
 function fingerOfShape(shape) {
@@ -166,26 +212,24 @@ function applyEngineSettings() {
   engine.drumId = settings.drumId;
   engine.drumsOn = settings.drumsOn;
   engine.bpm = settings.bpm;
-  engine.capo = settings.capo;
+  engine.capo = 0; // 升降调直接换和弦排布，不靠变调夹
   engine.humanize = settings.humanize;
   engine.spread = settings.spread;
-  engine.palmMute = settings.palmMute;
   engine.countIn = settings.countIn;
-  engine.followMode = settings.follow;
+  engine.followMode = settings.mode === "auto";
   engine.barsPerChord = settings.barsPerChord;
   engine.progression = progressionChords();
   engine.setVolumes(settings.guitarVol / 100, settings.drumVol / 100);
 }
 
 function progressionChords() {
-  const tokens = splitProgression(settings.progression);
-  return (tokens.length ? tokens : ["C"]).map((shape) => ({ shape, name: soundingName(shape), voicing: voiceChord(shape) }));
+  return song.sequence.map((c) => chordObj(c.name));
 }
 
 function neededMidis() {
-  const shapes = new Set([...Object.values(settings.bindings), ...splitProgression(settings.progression)]);
+  const shapes = new Set([...Object.values(settings.bindings), ...song.sequence.map((c) => c.name)]);
   const midis = [];
-  shapes.forEach((s) => voiceChord(s).strings.forEach((m) => { if (m !== null) midis.push(m + settings.capo); }));
+  shapes.forEach((sh) => voiceChord(soundingName(sh)).strings.forEach((m) => { if (m !== null) midis.push(m); }));
   return midis;
 }
 
@@ -277,38 +321,93 @@ async function ensureAudioReady() {
 }
 
 // ---------------- 渲染 ----------------
+function songWindowStart() {
+  const pos = settings.mode === "auto" ? Math.max(0, state.autoPos) : state.songPos;
+  return Math.max(0, Math.min(pos - 1, song.sequence.length - 5));
+}
+
 function renderPads() {
+  if (settings.mode !== "free") {
+    // 跟谱 / 自动：按键显示歌里接下来的和弦，点哪个就跳到哪个
+    const start = songWindowStart();
+    const cur = settings.mode === "auto" ? state.autoPos : state.songPos;
+    el.pads.innerHTML = Array.from({ length: Math.min(5, song.sequence.length) }, (_, k) => {
+      const pos = start + k;
+      const name = soundingName(song.sequence[pos].name);
+      const label = pos === cur ? "现在" : pos < cur ? "上一个" : pos === cur + 1 ? "下一个" : "之后";
+      return `<button type="button" class="pad${pos === cur ? " active" : ""}" data-pos="${pos}" aria-label="${label}：${escapeHtml(name)}">
+        <span class="pad-top"><span>${label}</span><span>${pos + 1}/${song.sequence.length}</span></span>
+        <span class="pad-chord">${escapeHtml(name)}</span>
+      </button>`;
+    }).join("");
+    renderLyrics();
+    return;
+  }
   el.pads.innerHTML = FINGERS.map((f) => {
-    const shape = settings.bindings[f];
-    const name = soundingName(shape);
+    const name = soundingName(settings.bindings[f]);
     return `<button type="button" class="pad" data-finger="${f}" aria-label="${f} 指：${escapeHtml(name)}">
       <span class="pad-top">${fingersGlyph(f)}<span>${f}</span></span>
-      <span class="pad-chord">${escapeHtml(name)}${settings.capo ? `<span class="pad-shape">按 ${escapeHtml(shape)}</span>` : ""}</span>
+      <span class="pad-chord">${escapeHtml(name)}</span>
     </button>`;
   }).join("");
-  renderLive();
+  renderLyrics();
+}
+
+function lyricLineHtml(li, cur) {
+  const line = song.lines[li];
+  if (!line) return "";
+  const segs = [];
+  const chords = line.chords;
+  if (!chords.length) return `<span class="lyric-seg"><span class="ch"></span><span class="tx">${escapeHtml(line.text)}</span></span>`;
+  if (chords[0].at > 0) segs.push(`<span class="lyric-seg"><span class="ch"></span><span class="tx">${escapeHtml(line.text.slice(0, chords[0].at))}</span></span>`);
+  chords.forEach((c, k) => {
+    const text = line.text.slice(c.at, k + 1 < chords.length ? chords[k + 1].at : undefined);
+    const cls = c.seq === cur ? " cur" : c.seq < cur ? " past" : "";
+    segs.push(`<span class="lyric-seg${cls}"><span class="ch">${escapeHtml(soundingName(c.name))}</span><span class="tx">${escapeHtml(text) || "&nbsp;"}</span></span>`);
+  });
+  return segs.join("");
+}
+
+function renderLyrics() {
+  const show = settings.mode !== "free";
+  el.lyrics.hidden = !show;
+  if (!show) return;
+  const cur = settings.mode === "auto" ? Math.max(0, state.autoPos) : state.songPos;
+  const li = song.sequence[cur]?.line ?? 0;
+  el.lyricNow.innerHTML = lyricLineHtml(li, cur);
+  const nextLi = li + 1 < song.lines.length ? li + 1 : 0;
+  el.lyricNext.innerHTML = song.lines.length > 1 ? lyricLineHtml(nextLi, cur) : "";
 }
 
 let lastHudName = null;
 function renderLive() {
   const finger = state.activeFinger;
-  const follow = settings.follow && engine.running;
+  const follow = settings.mode === "auto" && engine.running;
   let name = null;
   let meta = "";
-  if (follow && state.heardChord) {
+  if (settings.mode === "song") {
+    const next = songChordAt(state.songPos + 1).name;
+    if (finger) {
+      name = songChordAt(state.songPos).name;
+      meta = state.cameraOn ? `换一个手势 → 下一个和弦 ${next}` : `点「下一个」或按 → 键 → ${next}`;
+    } else {
+      meta = state.cameraOn ? "伸出手指开始弹；每换一次手势，就走到下一个和弦" : "点下方的和弦开始弹";
+    }
+  } else if (follow && state.heardChord) {
     name = state.heardChord.name;
     const f = fingerOfShape(state.heardChord.shape);
     meta = f ? `比 ${f} 根手指跟着弹` : "这个和弦没绑手指，听着唱就好";
   } else if (finger) {
     const chord = chordFor(finger);
     name = chord?.name || null;
-    meta = `${finger} 根手指 · ${FINGER_NAMES[finger]}${settings.capo ? ` · 按 ${chord.shape}` : ""}`;
+    meta = `${finger} 根手指 · ${FINGER_NAMES[finger]}`;
   } else {
     meta = state.cameraOn
       ? (state.camFinger === 0 ? "握拳：静音" : state.lastLandmarks ? "看到手了，伸出 1–5 根手指" : "把手放进画面")
       : "点下方和弦，或按数字键 1–5";
   }
-  el.hudLabel.textContent = follow ? "自动走谱" : settings.hold ? "当前和弦 · 保持" : "当前和弦";
+  el.hudLabel.textContent = settings.mode === "song" ? `跟谱弹唱 · ${song.title}`
+    : settings.mode === "auto" ? `自动走谱 · ${song.title}` : settings.hold ? "当前和弦 · 保持" : "当前和弦";
   el.hudChord.textContent = name || "—";
   el.hudChord.classList.toggle("idle", !name);
   if (name && name !== lastHudName) {
@@ -319,30 +418,21 @@ function renderLive() {
   lastHudName = name;
   el.hudMeta.textContent = meta;
 
-  // 自动走谱：显示下一个和弦与是否比对
-  if (settings.follow) {
-    const prog = progressionChords();
-    let idx = 0;
-    if (engine.running && state.heardStep >= 0) {
-      const bar = Math.floor(state.heardStep / engine.stepsPerBar);
-      idx = Math.floor(bar / settings.barsPerChord) % prog.length;
-    }
-    const next = prog[(idx + (engine.running ? 1 : 0)) % prog.length];
-    const nf = fingerOfShape(next.shape);
-    const current = engine.running ? prog[idx] : null;
-    const match = current && finger && settings.bindings[finger] === current.shape;
+  // 自动走谱：只管唱，提示下一个和弦
+  if (settings.mode === "auto") {
+    const idx = engine.running ? Math.max(0, state.autoPos) : 0;
+    const next = songChordAt(idx + (engine.running ? 1 : 0));
     el.hudNext.hidden = false;
-    el.hudNext.innerHTML = `${engine.running ? "下一个" : "从这里开始"} <b>${escapeHtml(next.name)}</b>${nf ? ` · ${nf} 指` : ""}${match ? ' <span class="match">✓ 跟上了</span>' : ""}`;
+    el.hudNext.innerHTML = `${engine.running ? "下一个" : "点「开始伴奏」从这里开始"} <b>${escapeHtml(next.name)}</b>`;
   } else {
     el.hudNext.hidden = true;
   }
 
-  const targetShape = follow && state.heardChord ? state.heardChord.shape : null;
-  el.pads.querySelectorAll(".pad").forEach((pad) => {
-    const f = Number(pad.dataset.finger);
-    pad.classList.toggle("active", f === finger);
-    pad.classList.toggle("target", Boolean(targetShape) && settings.bindings[f] === targetShape);
-  });
+  if (settings.mode === "free") {
+    el.pads.querySelectorAll(".pad").forEach((pad) => {
+      pad.classList.toggle("active", Number(pad.dataset.finger) === finger);
+    });
+  }
   checkTutorial();
 }
 
@@ -374,6 +464,7 @@ function renderRhythmChip() {
 
 function renderAirDrum() {
   el.airDrum.hidden = !settings.airDrum;
+  el.stage.style.setProperty("--air-drum-size", `${settings.airDrumSize}px`);
   el.airDrum.setAttribute("aria-pressed", String(settings.drumsOn));
   el.drumsOn.checked = settings.drumsOn;
 }
@@ -387,7 +478,7 @@ function renderBindings() {
   el.bindings.innerHTML = FINGERS.map((f) => {
     const cur = settings.bindings[f];
     const opts = (options.includes(cur) ? options : [cur, ...options])
-      .map((c) => `<option value="${c}"${c === cur ? " selected" : ""}>${c}${settings.capo ? `（听到 ${soundingName(c)}）` : ""}</option>`).join("");
+      .map((c) => `<option value="${c}"${c === cur ? " selected" : ""}>${c}${settings.transpose ? `（升降后 ${soundingName(c)}）` : ""}</option>`).join("");
     const up = customAudio.get(f);
     return `<div class="binding">
       <span class="binding-finger">${fingersGlyph(f)}${f}</span>
@@ -421,20 +512,18 @@ function renderSettings() {
   el.drumVol.value = settings.drumVol;
   el.humanize.checked = settings.humanize;
   el.spread.checked = settings.spread;
-  el.palmMute.checked = settings.palmMute;
   el.drumsOn.checked = settings.drumsOn;
   el.airDrumOn.checked = settings.airDrum;
   el.countIn.checked = settings.countIn;
   el.drumPattern.value = settings.drumId;
-  el.keySelect.value = settings.key;
-  el.capo.value = String(settings.capo);
-  el.progression.value = settings.progression;
-  const presetMatch = PROGRESSION_PRESETS.find(([p]) => transposeProgression(p, keyInterval("C", settings.key)) === splitProgression(settings.progression).join(" "));
-  el.preset.value = presetMatch ? presetMatch[0] : "";
+  fillSongs();
+  el.transpose.value = String(settings.transpose);
+  el.songDelete.hidden = !settings.customSongs.some((x) => x.id === settings.songId);
+  el.airDrumSize.value = settings.airDrumSize;
   setSeg(el.barsSeg, settings.barsPerChord);
   setSeg(el.holdSeg, settings.hold ? "hold" : "stop");
   setSeg(el.stabilitySeg, settings.stability);
-  setSeg(el.modeSeg, settings.follow ? "follow" : "gesture");
+  setSeg(el.modeSeg, settings.mode);
   el.mirror.checked = settings.mirror;
   el.skeleton.checked = settings.skeleton;
   el.perfOn.checked = settings.perf;
@@ -453,16 +542,26 @@ function fillSelects() {
   el.strumPattern.innerHTML = STRUM_PATTERNS.map((p) => `<option value="${p.id}">${p.name}  ·  ${p.pattern.split("").join(" ")}</option>`).join("");
   el.arpPattern.innerHTML = ARP_PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
   el.drumPattern.innerHTML = DRUM_PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-  el.keySelect.innerHTML = KEYS.map((k) => `<option value="${k}">${k} 调</option>`).join("");
-  el.capo.innerHTML = Array.from({ length: 8 }, (_, i) => `<option value="${i}">${i ? `${i} 品` : "不夹"}</option>`).join("");
+  el.transpose.innerHTML = Array.from({ length: 13 }, (_, k) => {
+    const v = k - 6;
+    const label = v === 0 ? "原调" : v > 0 ? `升 ${v} 个半音（更高）` : `降 ${-v} 个半音（更低）`;
+    return `<option value="${v}">${label}</option>`;
+  }).join("");
 }
 
-function fillPresets() {
-  const shift = keyInterval("C", settings.key);
-  el.preset.innerHTML = `<option value="">自己写…</option>` + PROGRESSION_PRESETS.map(([p, label]) => {
-    const t = transposeProgression(p, shift);
-    return `<option value="${p}">${label} — ${t}</option>`;
-  }).join("");
+function fillSongs() {
+  const mine = settings.customSongs.map((x) => `<option value="${escapeHtml(x.id)}">我导入的：${escapeHtml(x.title)}</option>`).join("");
+  const songs = BUILTIN_SONGS.filter((x) => !x.id.startsWith("p_")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
+  const practice = BUILTIN_SONGS.filter((x) => x.id.startsWith("p_")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
+  el.songSelect.innerHTML = (mine ? `<optgroup label="我导入的歌">${mine}</optgroup>` : "")
+    + `<optgroup label="内置歌曲（公有领域）">${songs}</optgroup><optgroup label="和弦练习">${practice}</optgroup>`;
+  el.songSelect.value = settings.songId;
+}
+
+function useSong(id) {
+  loadSong(id);
+  changed({ rerenderPads: true, reload: true });
+  renderSettings();
 }
 
 // ---------------- 设置变更 ----------------
@@ -470,16 +569,10 @@ function changed({ rerenderPads = false, reload = false } = {}) {
   applyEngineSettings();
   save();
   if (rerenderPads) { renderPads(); renderGuide(); renderBindings(); }
+  renderLive();
   renderRhythmChip();
   if (reload && audioReady) loadInstrument();
   updateChord(true);
-}
-
-function setProgression(text, { rebind = true } = {}) {
-  const tokens = splitProgression(text);
-  settings.progression = tokens.join(" ");
-  if (rebind && tokens.length) settings.bindings = bindingsFromProgression(tokens, settings.key);
-  changed({ rerenderPads: true, reload: settings.instrument === "piano" || settings.instrument === "violin" });
 }
 
 function onSeg(seg, handler) {
@@ -532,31 +625,45 @@ function bindSettings() {
   el.drumVol.addEventListener("input", () => { settings.drumVol = Number(el.drumVol.value); applyEngineSettings(); save(); });
   el.humanize.addEventListener("change", () => { settings.humanize = el.humanize.checked; changed(); });
   el.spread.addEventListener("change", () => { settings.spread = el.spread.checked; changed(); });
-  el.palmMute.addEventListener("change", () => { settings.palmMute = el.palmMute.checked; changed(); });
   el.drumsOn.addEventListener("change", () => { setDrums(el.drumsOn.checked); });
-  el.airDrumOn.addEventListener("change", () => { settings.airDrum = el.airDrumOn.checked; renderAirDrum(); save(); });
+  el.airDrumOn.addEventListener("change", () => { settings.airDrum = el.airDrumOn.checked; renderAirDrum(); save(); resizeOverlay(); });
+  el.airDrumSize.addEventListener("input", () => { settings.airDrumSize = Number(el.airDrumSize.value); renderAirDrum(); save(); requestAnimationFrame(resizeOverlay); });
   el.countIn.addEventListener("change", () => { settings.countIn = el.countIn.checked; changed(); });
   el.drumPattern.addEventListener("change", () => { settings.drumId = el.drumPattern.value; changed(); });
-  el.keySelect.addEventListener("change", () => {
-    const shift = keyInterval(settings.key, el.keySelect.value);
-    settings.key = el.keySelect.value;
-    const moved = transposeProgression(settings.progression, shift);
-    fillPresets();
-    setProgression(moved);
-    renderSettings();
+  el.transpose.addEventListener("change", () => {
+    settings.transpose = Number(el.transpose.value);
+    changed({ rerenderPads: true, reload: true });
   });
-  el.capo.addEventListener("change", () => {
-    settings.capo = Number(el.capo.value);
-    changed({ rerenderPads: true, reload: settings.instrument === "piano" || settings.instrument === "violin" });
+  el.songSelect.addEventListener("change", () => {
+    useSong(el.songSelect.value);
+    toast(`已选「${song.title}」，共 ${song.sequence.length} 个和弦`);
   });
-  el.preset.addEventListener("change", () => {
-    if (!el.preset.value) return;
-    setProgression(transposeProgression(el.preset.value, keyInterval("C", settings.key)));
-    el.progression.value = settings.progression;
+  el.songImport.addEventListener("click", () => {
+    const text = el.songText.value.trim();
+    const parsed = parseSheet(text);
+    if (!parsed.sequence.length) {
+      toast("没认出和弦。和弦要用 C、Am、G7 这样的写法，放在方括号里或单独一行在歌词上面。", 5000);
+      return;
+    }
+    const title = el.songTitle.value.trim() || `导入的歌 ${settings.customSongs.length + 1}`;
+    const id = `u_${Date.now().toString(36)}`;
+    settings.customSongs.unshift({ id, title, text });
+    el.songText.value = "";
+    el.songTitle.value = "";
+    el.importBox.open = false;
+    useSong(id);
+    if (settings.mode === "free") {
+      settings.mode = "song";
+      changed({ rerenderPads: true });
+      renderSettings();
+    }
+    toast(`识别到 ${parsed.lines.length} 行、${parsed.sequence.length} 个和弦，已切到「跟谱弹唱」`, 4000);
   });
-  el.progression.addEventListener("change", () => {
-    setProgression(el.progression.value);
-    renderSettings();
+  el.songDelete.addEventListener("click", () => {
+    const item = settings.customSongs.find((x) => x.id === settings.songId);
+    if (!item || !confirm(`删除「${item.title}」？`)) return;
+    settings.customSongs = settings.customSongs.filter((x) => x.id !== item.id);
+    useSong(DEFAULTS.songId);
   });
   onSeg(el.barsSeg, (v) => { settings.barsPerChord = Number(v); changed(); });
   el.bindings.addEventListener("change", (e) => {
@@ -603,9 +710,10 @@ function bindSettings() {
   el.resetAll.addEventListener("click", () => {
     if (!confirm("恢复全部默认设置？自定义的和弦绑定和走向会被清掉。")) return;
     const theme = settings.theme;
-    Object.assign(settings, structuredClone(DEFAULTS), { theme, introSeen: true, tutorialDone: true });
+    const customSongs = settings.customSongs;
+    Object.assign(settings, structuredClone(DEFAULTS), { theme, introSeen: true, tutorialDone: true, customSongs });
     customAudio.clear();
-    fillPresets();
+    loadSong(settings.songId);
     renderSettings();
     changed({ rerenderPads: true, reload: true });
     toast("已恢复默认设置");
@@ -668,7 +776,7 @@ async function startCamera() {
   el.introCam.querySelector("span").textContent = "正在打开…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js?v=2.5");
+      const { HandTracker } = await import("./hands.js?v=2.9");
       tracker = new HandTracker(el.video, {
         onResult: onHands,
         onStatus: (s) => {
@@ -731,8 +839,16 @@ function onHands(result, now) {
   const count = lm ? classifyHand(lm, vw / vh).count : undefined;
   const changedNow = stabilizer.push(count, now);
   if (changedNow) {
+    const prev = state.camFinger;
     state.camFinger = stabilizer.stable;
-    updateChord();
+    // 跟谱弹唱：从一个手势换成另一个手势（都是伸着手指）= 走到下一个和弦
+    if (settings.mode === "song" && prev > 0 && state.camFinger > 0 && prev !== state.camFinger) {
+      setSongPos(state.songPos + 1);
+      updateChord(true);
+      renderPads();
+    } else {
+      updateChord();
+    }
     renderLive();
   }
   if (settings.skeleton) drawHand(lm, vw, vh);
@@ -799,22 +915,38 @@ function drawHand(lm, vw, vh) {
   }
 }
 
+// 手（任意指尖）一碰到「鼓」就切换，不用停留；手要先离开再碰才会再次切换，避免来回闪
 function checkAirDrum(lm, vw, vh, now) {
   if (!airDrumBox) return;
-  const [x, y] = mapPoint(lm[8], vw, vh, overlaySize.w, overlaySize.h);
-  const pad = 6;
+  const pad = 8;
   const z = airDrumBox;
-  const inside = x >= z.l - pad && x <= z.r + pad && y >= z.t - pad && y <= z.b + pad;
-  el.airDrum.classList.toggle("armed", inside && now > state.airDrumCooldown);
-  if (!inside) { state.airDrumSince = 0; return; }
-  if (!state.airDrumSince) state.airDrumSince = now;
-  if (now > state.airDrumCooldown && now - state.airDrumSince >= 300) {
+  const inside = [4, 8, 12, 16, 20].some((i) => {
+    const [x, y] = mapPoint(lm[i], vw, vh, overlaySize.w, overlaySize.h);
+    return x >= z.l - pad && x <= z.r + pad && y >= z.t - pad && y <= z.b + pad;
+  });
+  el.airDrum.classList.toggle("armed", inside);
+  if (inside && !state.airDrumInside && now > state.airDrumCooldown) {
     setDrums(!settings.drumsOn);
-    state.airDrumCooldown = now + 1200;
-    state.airDrumSince = 0;
-    el.airDrum.classList.remove("armed");
-    toast(settings.drumsOn ? "鼓：开" : "鼓：关", 1200);
+    state.airDrumCooldown = now + 600;
+    el.airDrum.classList.remove("hit");
+    void el.airDrum.offsetWidth;
+    el.airDrum.classList.add("hit");
+    toast(settings.drumsOn ? "鼓：开" : "鼓：关", 1000);
   }
+  state.airDrumInside = inside;
+}
+
+// 跟谱弹唱：点按键 / 键盘跳到某个和弦并弹出来
+async function jumpSong(pos) {
+  await ensureAudioReady();
+  setSongPos(pos);
+  if (!state.cameraOn) state.latchedFinger = 1;
+  const chord = chordFor(1);
+  state.activeFinger = computeFinger() || 1;
+  if (engine.running) engine.setChord(chord);
+  else { engine.chord = chord; engine.preview(chord); }
+  renderPads();
+  renderLive();
 }
 
 // ---------------- 伴奏 ----------------
@@ -832,6 +964,7 @@ async function togglePlay() {
     engine.stop();
     state.heardChord = null;
     state.heardStep = -1;
+    state.autoPos = -1;
     releaseWakeLock();
     renderPlay();
     renderBeats(null);
@@ -863,14 +996,14 @@ function frame(now) {
       renderBeats(info);
       if (!info.countIn) {
         state.heardStep = info.i;
-        if (settings.follow) {
+        if (settings.mode === "auto") {
           const prog = engine.progression;
           const bar = Math.floor(info.i / engine.stepsPerBar);
-          const chord = prog[Math.floor(bar / settings.barsPerChord) % prog.length];
-          if (chord && chord.name !== state.heardChord?.name) {
-            state.heardChord = chord;
-            renderLive();
-          } else if (info.slot === 0) {
+          const idx = Math.floor(bar / settings.barsPerChord) % prog.length;
+          if (idx !== state.autoPos) {
+            state.autoPos = idx;
+            state.heardChord = prog[idx];
+            renderPads();
             renderLive();
           }
         }
@@ -993,11 +1126,17 @@ function bindUi() {
   el.bpmUp.addEventListener("click", () => setBpm(settings.bpm + 2));
   el.bpmInput.addEventListener("change", () => setBpm(el.bpmInput.value));
   onSeg(el.modeSeg, (v) => {
-    settings.follow = v === "follow";
+    settings.mode = v;
     state.heardChord = null;
-    changed();
-    renderLive();
-    if (settings.follow && !engine.running) toast("自动走谱：按和弦谱每小节换一次，点「开始伴奏」就能跟着唱", 3600);
+    state.autoPos = -1;
+    if (v !== "free" && engine.running && v === "song") state.songPos = 0;
+    changed({ rerenderPads: true });
+    const tips = {
+      free: "自由弹：1–5 根手指各弹一个和弦",
+      song: `跟谱弹唱「${song.title}」：伸出手指开始弹，每换一次手势走到下一个和弦（没摄像头就点下方「下一个」）`,
+      auto: `自动走谱「${song.title}」：和弦每小节自动换，点「开始伴奏」跟着唱`,
+    };
+    toast(tips[v], 4200);
   });
 
   // 按键：摄像头开着时按住才响；没开摄像头时点一下锁定
@@ -1005,8 +1144,12 @@ function bindUi() {
     const pad = e.target.closest(".pad");
     if (!pad) return;
     e.preventDefault();
-    const f = Number(pad.dataset.finger);
     if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) tut.track = "keys"; }
+    if (pad.dataset.pos !== undefined) {
+      if (settings.mode === "song") jumpSong(Number(pad.dataset.pos));
+      return;
+    }
+    const f = Number(pad.dataset.finger);
     if (state.cameraOn) {
       pad.setPointerCapture?.(e.pointerId);
       pressFinger(f);
@@ -1016,22 +1159,29 @@ function bindUi() {
   });
   const padUp = (e) => {
     const pad = e.target.closest(".pad");
-    if (pad && state.cameraOn) releaseFinger(Number(pad.dataset.finger));
+    if (pad && pad.dataset.finger && state.cameraOn) releaseFinger(Number(pad.dataset.finger));
   };
   el.pads.addEventListener("pointerup", padUp);
   el.pads.addEventListener("pointercancel", padUp);
   el.pads.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       const pad = e.target.closest(".pad");
-      if (pad) { e.preventDefault(); e.stopPropagation(); pressFinger(Number(pad.dataset.finger), { latch: true }); }
+      if (pad?.dataset.pos !== undefined) { e.preventDefault(); e.stopPropagation(); if (settings.mode === "song") jumpSong(Number(pad.dataset.pos)); }
+      else if (pad) { e.preventDefault(); e.stopPropagation(); pressFinger(Number(pad.dataset.finger), { latch: true }); }
     }
   });
   el.airDrum.addEventListener("click", () => setDrums(!settings.drumsOn));
 
   const held = new Set();
   document.addEventListener("keydown", (e) => {
-    if (e.target.closest("input, select, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest?.("input, select, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key;
+    if (settings.mode === "song" && (/^[1-5]$/.test(k) || k === "ArrowRight" || k === "ArrowLeft")) {
+      e.preventDefault();
+      if (e.repeat) return;
+      jumpSong(state.songPos + (k === "ArrowLeft" ? -1 : state.activeFinger ? 1 : 0));
+      return;
+    }
     if (/^[1-5]$/.test(k)) {
       e.preventDefault();
       if (held.has(k)) return;
@@ -1060,7 +1210,7 @@ function bindUi() {
   document.addEventListener("keyup", (e) => {
     if (!/^[1-5]$/.test(e.key)) return;
     held.delete(e.key);
-    if (state.cameraOn) releaseFinger(Number(e.key));
+    if (state.cameraOn && settings.mode === "free") releaseFinger(Number(e.key));
   });
   window.addEventListener("blur", () => { held.clear(); if (state.manualFinger) { state.manualFinger = null; updateChord(); } });
 
@@ -1076,11 +1226,12 @@ function bindUi() {
 
 // ---------------- 启动 ----------------
 function init() {
+  loadSong(settings.songId, { rebind: false });
   applyTheme();
   fillSelects();
-  fillPresets();
   renderSettings();
   renderPads();
+  renderLive();
   renderBeats(null);
   renderPlay();
   bindSettings();
@@ -1099,4 +1250,4 @@ function init() {
 init();
 
 // 调试/测试入口
-window.airGuitar = { engine, settings, state, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };
+window.airGuitar = { engine, settings, state, jumpSong, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };

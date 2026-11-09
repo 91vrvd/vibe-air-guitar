@@ -91,7 +91,7 @@ test("和弦谱分配手指：调内级数优先", () => {
 
 test("节奏型数据合法", () => {
   for (const p of STRUM_PATTERNS) {
-    assert.match(p.pattern, /^[DUx-]+$/);
+    assert.match(p.pattern, /^[DUxBA-]+$/);
     assert.equal(p.pattern.length, (p.meter || 4) * 2, p.id);
   }
   for (const d of DRUM_PATTERNS) {
@@ -102,3 +102,32 @@ test("节奏型数据合法", () => {
 });
 
 console.log(`\n${passed} 组通过`);
+
+// ---- 歌曲解析 ----
+const { parseSheet, BUILTIN_SONGS, chordToken, guessKey, topChords } = await import("../js/songs.js");
+test("文字谱：方括号写法", () => {
+  const r = parseSheet("[C]长亭外，[F]古道[C]边");
+  assert.deepEqual(r.sequence.map((c) => c.name), ["C", "F", "C"]);
+  assert.equal(r.lines[0].text, "长亭外，古道边");
+  assert.deepEqual(r.lines[0].chords.map((c) => c.at), [0, 4, 6]);
+});
+test("文字谱：和弦行在上、歌词在下", () => {
+  const r = parseSheet("C       G\n我曾经  跨过山和大海\nAm  F\n");
+  assert.deepEqual(r.sequence.map((c) => c.name), ["C", "G", "Am", "F"]);
+  assert.equal(r.lines[0].text[r.lines[0].chords[1].at], "跨", "G 对到“跨”字（中文占 2 格）");
+  assert.equal(r.lines[1].text, "");
+});
+test("文字谱：斜线和弦、扩展和弦、段落名", () => {
+  assert.equal(chordToken("G/B"), "G");
+  assert.equal(chordToken("Cadd9"), "C");
+  assert.equal(chordToken("Bbmaj7"), "A#maj7");
+  assert.equal(chordToken("我"), "");
+  const r = parseSheet("[Verse]\n[Am]hello");
+  assert.deepEqual(r.sequence.map((c) => c.name), ["Am"]);
+});
+test("内置歌曲都能解析，猜调和常用和弦合理", () => {
+  for (const s of BUILTIN_SONGS) assert.ok(parseSheet(s.text).sequence.length >= 3, s.id);
+  assert.equal(guessKey(parseSheet("Am F C G").sequence), "C");
+  assert.deepEqual(topChords(parseSheet(BUILTIN_SONGS[0].text).sequence, 3), ["C", "F", "G"]);
+});
+console.log(`\n${passed} 组通过（含歌曲）`);

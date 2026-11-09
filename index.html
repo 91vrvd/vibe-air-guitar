@@ -14,7 +14,7 @@
       if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
     } catch {}
   </script>
-  <link rel="stylesheet" href="./styles.css?v=2.5">
+  <link rel="stylesheet" href="./styles.css?v=2.9">
 </head>
 <body>
   <div class="app" id="app">
@@ -83,6 +83,11 @@
         <span>开启摄像头，用手势弹</span>
       </button>
 
+      <div class="lyrics" id="lyrics" hidden>
+        <div class="lyric-line now" id="lyricNow"></div>
+        <div class="lyric-line next" id="lyricNext"></div>
+      </div>
+
       <div class="coach" id="coach" role="status" aria-live="polite" hidden>
         <div class="coach-head">
           <span class="coach-step" id="coachStep">新手教程 1/5</span>
@@ -108,9 +113,10 @@
           <label class="stepper-value"><input id="bpmInput" type="number" inputmode="numeric" min="50" max="180" value="96" aria-label="BPM"><small>BPM</small></label>
           <button type="button" id="bpmUp" aria-label="加快">+</button>
         </div>
-        <div class="seg seg-mode" role="radiogroup" aria-label="伴奏方式" id="modeSeg">
-          <button type="button" role="radio" data-value="gesture" aria-checked="true">手势换和弦</button>
-          <button type="button" role="radio" data-value="follow" aria-checked="false">自动走谱</button>
+        <div class="seg seg-mode" role="radiogroup" aria-label="演奏方式" id="modeSeg">
+          <button type="button" role="radio" data-value="free" aria-checked="true" title="1–5 根手指各弹一个和弦">自由弹</button>
+          <button type="button" role="radio" data-value="song" aria-checked="false" title="跟着歌词，换一个手势就走到下一个和弦">跟谱弹唱</button>
+          <button type="button" role="radio" data-value="auto" aria-checked="false" title="和弦按小节自动换，只管唱">自动走谱</button>
         </div>
         <button class="chip" id="rhythmChip" type="button" title="换节奏型">
           <svg viewBox="0 0 24 24"><path d="M4 12h3l2-6 3 12 3-9 2 3h3"/></svg>
@@ -165,7 +171,6 @@
           <div class="toggles">
             <label class="toggle"><input type="checkbox" id="humanize"><span></span>人性化（力度和时值微随机）</label>
             <label class="toggle"><input type="checkbox" id="spread"><span></span>扫弦拉开（逐弦有先后）</label>
-            <label class="toggle"><input type="checkbox" id="palmMute"><span></span>手掌闷音（短促）</label>
           </div>
         </section>
 
@@ -173,7 +178,7 @@
           <h3>鼓</h3>
           <div class="toggles">
             <label class="toggle"><input type="checkbox" id="drumsOn"><span></span>鼓伴奏</label>
-            <label class="toggle"><input type="checkbox" id="airDrumOn"><span></span>画面里的「鼓」开关（食指停留切换）</label>
+            <label class="toggle"><input type="checkbox" id="airDrumOn"><span></span>画面右上角的「鼓」开关（手碰到就开/关）</label>
             <label class="toggle"><input type="checkbox" id="countIn"><span></span>开始前数一小节预备拍</label>
           </div>
           <div class="field">
@@ -181,40 +186,47 @@
             <select id="drumPattern"></select>
           </div>
           <div class="field range">
+            <label for="airDrumSize">「鼓」开关大小</label>
+            <input id="airDrumSize" type="range" min="60" max="220" step="10" value="120">
+          </div>
+          <div class="field range">
             <label for="drumVol">鼓音量</label>
             <input id="drumVol" type="range" min="0" max="100" value="60">
           </div>
         </section>
 
-        <section class="group">
-          <h3>调与和弦</h3>
-          <div class="field-row">
-            <div class="field">
-              <label for="keySelect">调</label>
-              <select id="keySelect"></select>
+        <section class="group" id="songGroup">
+          <h3>歌曲与和弦</h3>
+          <div class="field">
+            <label for="songSelect">选歌 / 和弦练习</label>
+            <select id="songSelect"></select>
+          </div>
+          <details class="import" id="importBox">
+            <summary>导入一首歌（粘贴文字谱）</summary>
+            <div class="import-body">
+              <input id="songTitle" type="text" autocomplete="off" placeholder="歌名（可不填）">
+              <textarea id="songText" rows="8" spellcheck="false" placeholder="把和弦和歌词粘贴到这里，例如：&#10;[C]长亭外，[F]古道[C]边&#10;&#10;或者和弦在上、歌词在下：&#10;C        F    C&#10;长亭外    古道边"></textarea>
+              <div class="custom-actions">
+                <button type="button" class="btn small primary" id="songImport">识别并使用</button>
+                <button type="button" class="btn small ghost danger" id="songDelete" hidden>删除这首</button>
+              </div>
+              <p class="hint" id="importHint">在有谱么等网站打开一首歌的文字版谱，选中和弦+歌词复制，粘贴进来即可。只保存在你自己的浏览器里。图片谱暂不支持识别。</p>
             </div>
-            <div class="field">
-              <label for="capo">变调夹</label>
-              <select id="capo"></select>
-            </div>
+          </details>
+          <div class="field">
+            <label for="transpose">升降调（唱着太高或太低就调这里）</label>
+            <select id="transpose"></select>
           </div>
           <div class="field">
-            <label for="preset">常用和弦走向</label>
-            <select id="preset"></select>
-          </div>
-          <div class="field">
-            <label for="progression">和弦谱（自动走谱按这个顺序，每个和弦一小节）</label>
-            <input id="progression" type="text" autocomplete="off" spellcheck="false" placeholder="例如 C G Am F">
-          </div>
-          <div class="field">
-            <span class="field-label">每个和弦停留</span>
+            <span class="field-label">自动走谱时，每个和弦弹几小节</span>
             <div class="seg" role="radiogroup" id="barsSeg">
               <button type="button" role="radio" data-value="1">1 小节</button>
               <button type="button" role="radio" data-value="2">2 小节</button>
             </div>
           </div>
+          <div class="field-label">「自由弹」时 1–5 根手指对应的和弦</div>
           <div class="bindings" id="bindings"></div>
-          <p class="hint">改和弦谱会按调内级数自动分配手指；也可以单独给每根手指换和弦，或上传一段自己的音频。</p>
+          <p class="hint">换歌时会自动用这首歌最常用的 5 个和弦；也可以单独改，或给某根手指换成自己上传的音频。</p>
         </section>
 
         <section class="group">
@@ -256,6 +268,6 @@
     <div class="scrim" id="scrim" hidden></div>
   </div>
 
-  <script type="module" src="./js/main.js?v=2.5"></script>
+  <script type="module" src="./js/main.js?v=2.9"></script>
 </body>
 </html>

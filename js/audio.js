@@ -4,8 +4,8 @@
 // 2. 换和弦时取消尚未发声的旧和弦、重排新和弦，并按需立刻扫一下，所以既跟手又不乱拍。
 // 3. 每根弦只保留一个发声体：新音会切掉同弦旧音，像真吉他一样，也让同时发声数有上限。
 
-import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=2.5";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.5";
+import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=2.9";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.9";
 
 export const INSTRUMENTS = [
   { id: "acoustic", name: "木吉他（钢弦）", kind: "sampler" },
@@ -101,7 +101,6 @@ export class Engine {
     this.bpm = 96;
     this.capo = 0;
     this.humanize = true;
-    this.palmMute = false;
     this.spread = true;
     this.countIn = false;
     this.followMode = false; // true = 按和弦谱自动走
@@ -587,6 +586,10 @@ export class Engine {
   }
 
   pluckString(voicing, t, spec, vel) {
+    if (Array.isArray(spec)) {
+      // 几根弦同时拨（掐弹、和弦拨），每根稍轻
+      return spec.flatMap((one, n) => this.pluckString(voicing, t + n * 0.003, one, vel * (spec.length > 1 ? 0.8 : 1)));
+    }
     const root = voicing.bassString; // 索引：0 = 6 弦
     let idx;
     if (spec === "R") idx = root;
@@ -603,7 +606,12 @@ export class Engine {
 
   // ---------- 调度 ----------
   get strumPattern() { return findById(STRUM_PATTERNS, this.strumId); }
-  get stepsPerBar() { return (this.strumPattern.meter || 4) * 2; }
+  get arpPattern() { return findById(ARP_PATTERNS, this.arpId); }
+  // 一小节几步：扫弦看节奏型拍号，分解看分解方式拍号
+  get stepsPerBar() {
+    const meter = this.playStyle === "arp" ? this.arpPattern.meter : this.playStyle === "strum" ? this.strumPattern.meter : null;
+    return (meter || 4) * 2;
+  }
 
   stepDuration() { return 60 / this.bpm / 2; }
 
@@ -637,11 +645,13 @@ export class Engine {
       const stroke = pattern[slot % pattern.length];
       if (stroke === "-") return [];
       if (stroke === "x") return this.chuck(t, accent, chord.voicing);
-      return this.strum(chord.voicing, t, stroke, accent * (stroke === "U" ? 0.82 : 1), { short: this.palmMute });
+      // B / A：只弹根音 / 交替低音，后面的扫弦接上（低音扫弦）
+      if (stroke === "B" || stroke === "A") return this.pluckString(chord.voicing, t, stroke === "B" ? "R" : "A", 0.85 * accent);
+      return this.strum(chord.voicing, t, stroke, accent * (stroke === "U" ? 0.82 : 1), { short: Boolean(this.strumPattern.short) });
     }
     const steps = this.playStyle === "custom" && this.customSteps.length
       ? this.customSteps
-      : findById(ARP_PATTERNS, this.arpId).steps;
+      : this.arpPattern.steps;
     const spec = steps[((i % steps.length) + steps.length) % steps.length];
     const humanVel = this.humanize ? 0.88 + Math.random() * 0.2 : 1;
     return this.pluckString(chord.voicing, t, spec, 0.62 * accent * humanVel);
@@ -748,8 +758,9 @@ export class Engine {
     }
     while (this.nextTime < now + LOOKAHEAD) {
       this.scheduleStep(this.step, this.nextTime);
-      const swing = this.strumPattern.swing || 0;
-      this.nextTime += this.stepDuration() + (this.step % 2 === 0 ? swing : -swing);
+      // swing：后半拍推迟的比例（0.3 左右就是三连音式的摇摆）
+      const swing = this.playStyle === "strum" ? this.strumPattern.swing || 0 : 0;
+      this.nextTime += this.stepDuration() * (1 + (this.step % 2 === 0 ? swing : -swing));
       this.step += 1;
     }
     if (this.uiQueue.length > 64) this.uiQueue.splice(0, this.uiQueue.length - 16);
@@ -830,7 +841,7 @@ export class Engine {
     if (firstStroke === null || firstStroke - now > 0.09) {
       this.dampAll(now + 0.002, 0.02);
       if (next.custom) this.renderGuitar(next, 0, now + 0.004);
-      else if (this.playStyle === "strum") this.strum(next.voicing, now + 0.004, "D", 0.92, { short: this.palmMute });
+      else if (this.playStyle === "strum") this.strum(next.voicing, now + 0.004, "D", 0.92, { short: Boolean(this.strumPattern.short) });
       else this.pluckString(next.voicing, now + 0.004, "R", 0.7);
     }
   }
