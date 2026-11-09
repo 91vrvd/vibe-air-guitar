@@ -131,3 +131,22 @@ test("内置歌曲都能解析，猜调和常用和弦合理", () => {
   assert.deepEqual(topChords(parseSheet(BUILTIN_SONGS[0].text).sequence, 3), ["C", "F", "G"]);
 });
 console.log(`\n${passed} 组通过（含歌曲）`);
+
+const { detectStyle, sheetFromOcrLines, STYLES } = await import("../js/songs.js");
+test("每首内置歌都有有效曲风；导入时能猜曲风", () => {
+  for (const s of BUILTIN_SONGS) assert.ok(STYLES[s.style], s.id);
+  assert.equal(detectStyle("拍号：3/4 拍速：90", []).styleId, "waltz");
+  assert.equal(detectStyle("拍速：68", parseSheet("C G").sequence).bpm, 68);
+  assert.equal(detectStyle("", parseSheet("Am Em F G Am Dm").sequence).styleId, "ballad");
+  assert.equal(detectStyle("", parseSheet("C G F C").sequence).styleId, "folk");
+});
+test("截图识别：和弦按横坐标落到歌词的字上", () => {
+  const sym = (t, x) => ({ text: t, bbox: { x0: x, x1: x + 18 } });
+  const lines = [
+    { text: "C  Arn", words: [{ text: "C", bbox: { x0: 10, x1: 20 } }, { text: "Arn", bbox: { x0: 82, x1: 110 } }] },
+    { text: "长 亭 外 古 道 边", words: [{ text: "长亭外古道边", bbox: { x0: 10, x1: 130 }, symbols: [sym("长", 10), sym("亭", 30), sym("外", 50), sym("古", 70), sym("道", 90), sym("边", 110)] }] },
+    { text: "晚 风 拂 柳", words: [{ text: "晚风拂柳", bbox: { x0: 10, x1: 90 } }] },
+  ];
+  assert.equal(sheetFromOcrLines(lines), "[C]长亭外古[Am]道边\n晚风拂柳");
+});
+console.log(`\n${passed} 组通过（含曲风/截图）`);

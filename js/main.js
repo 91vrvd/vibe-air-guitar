@@ -1,10 +1,10 @@
 import {
   allChordOptions, bindingsFromProgression, defaultBindings, normalizeChord, transposeChord, voiceChord,
-} from "./theory.js?v=2.9";
-import { BUILTIN_SONGS, parseSheet, guessKey, topChords } from "./songs.js?v=2.9";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=2.9";
-import { Engine, INSTRUMENTS } from "./audio.js?v=2.9";
-import { classifyHand, GestureStabilizer } from "./gesture.js?v=2.9";
+} from "./theory.js?v=3.1";
+import { BUILTIN_SONGS, STYLES, parseSheet, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.1";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.1";
+import { Engine, INSTRUMENTS } from "./audio.js?v=3.1";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.1";
 
 const $ = (sel) => document.querySelector(sel);
 const STORE_KEY = "airGuitar.v2";
@@ -123,6 +123,7 @@ const el = {
   drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), airDrumSize: $("#airDrumSize"), countIn: $("#countIn"), drumPattern: $("#drumPattern"),
   songSelect: $("#songSelect"), songTitle: $("#songTitle"), songText: $("#songText"), songImport: $("#songImport"), songDelete: $("#songDelete"),
   importBox: $("#importBox"), transpose: $("#transpose"),
+  ocrBtn: $("#ocrBtn"), ocrStatus: $("#ocrStatus"), songStyle: $("#songStyle"), songStyleInfo: $("#songStyleInfo"), hudSong: $("#hudSong"),
   lyrics: $("#lyrics"), lyricNow: $("#lyricNow"), lyricNext: $("#lyricNext"),
   barsSeg: $("#barsSeg"), bindings: $("#bindings"),
   holdSeg: $("#holdSeg"), stabilitySeg: $("#stabilitySeg"),
@@ -160,6 +161,34 @@ function loadSong(id, { rebind = true } = {}) {
 function songChordAt(pos) {
   const item = song.sequence[((pos % song.sequence.length) + song.sequence.length) % song.sequence.length];
   return chordObj(item.name);
+}
+
+function songStyle() { return STYLES[song.style] || STYLES.folk; }
+
+function styleSummary(st, bpm) {
+  const how = st.style === "arp" ? `分解「${findById(ARP_PATTERNS, st.arpId).name}」` : `扫弦「${findById(STRUM_PATTERNS, st.strumId).name}」`;
+  const threeFour = (st.style === "arp" ? findById(ARP_PATTERNS, st.arpId).meter : findById(STRUM_PATTERNS, st.strumId).meter) === 3;
+  const drum = !st.drumsOn ? "不开鼓" : threeFour ? "鼓「华尔兹（嘭-嚓-嚓）」" : `鼓「${findById(DRUM_PATTERNS, st.drumId).name}」`;
+  return `${st.name} · ${bpm} BPM · ${how} · ${drum}`;
+}
+
+/** 按歌的曲风自动配好速度、弹法、节奏型和鼓 */
+function applySongStyle() {
+  const st = songStyle();
+  settings.style = st.style;
+  if (st.strumId) settings.strumId = st.strumId;
+  if (st.arpId) settings.arpId = st.arpId;
+  settings.drumsOn = st.drumsOn;
+  settings.drumId = st.drumId;
+  setBpm(song.bpm || st.bpm);
+}
+
+function renderSongInfo() {
+  const st = songStyle();
+  const summary = styleSummary(st, song.bpm || st.bpm);
+  el.songStyleInfo.textContent = `这首歌的推荐配置：${summary}${song.reason ? `（${song.reason}）` : ""}`;
+  el.hudSong.hidden = settings.mode === "free";
+  el.hudSong.textContent = `${song.sequence.length} 个和弦 · ${summary}`;
 }
 
 function setSongPos(pos) {
@@ -519,6 +548,7 @@ function renderSettings() {
   fillSongs();
   el.transpose.value = String(settings.transpose);
   el.songDelete.hidden = !settings.customSongs.some((x) => x.id === settings.songId);
+  renderSongInfo();
   el.airDrumSize.value = settings.airDrumSize;
   setSeg(el.barsSeg, settings.barsPerChord);
   setSeg(el.holdSeg, settings.hold ? "hold" : "stop");
@@ -542,6 +572,7 @@ function fillSelects() {
   el.strumPattern.innerHTML = STRUM_PATTERNS.map((p) => `<option value="${p.id}">${p.name}  ·  ${p.pattern.split("").join(" ")}</option>`).join("");
   el.arpPattern.innerHTML = ARP_PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
   el.drumPattern.innerHTML = DRUM_PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+  el.songStyle.innerHTML = `<option value="auto">自动识别（推荐）</option>` + Object.entries(STYLES).map(([id, st]) => `<option value="${id}">${st.name}</option>`).join("");
   el.transpose.innerHTML = Array.from({ length: 13 }, (_, k) => {
     const v = k - 6;
     const label = v === 0 ? "原调" : v > 0 ? `升 ${v} 个半音（更高）` : `降 ${-v} 个半音（更低）`;
@@ -560,8 +591,10 @@ function fillSongs() {
 
 function useSong(id) {
   loadSong(id);
+  applySongStyle();
   changed({ rerenderPads: true, reload: true });
   renderSettings();
+  toast(`「${song.title}」已自动配好：${styleSummary(songStyle(), settings.bpm)}`, 4500);
 }
 
 // ---------------- 设置变更 ----------------
@@ -634,9 +667,13 @@ function bindSettings() {
     settings.transpose = Number(el.transpose.value);
     changed({ rerenderPads: true, reload: true });
   });
-  el.songSelect.addEventListener("change", () => {
-    useSong(el.songSelect.value);
-    toast(`已选「${song.title}」，共 ${song.sequence.length} 个和弦`);
+  el.songSelect.addEventListener("change", () => useSong(el.songSelect.value));
+  el.ocrBtn.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.addEventListener("change", () => { if (input.files?.[0]) recognizeScreenshot(input.files[0]); });
+    input.click();
   });
   el.songImport.addEventListener("click", () => {
     const text = el.songText.value.trim();
@@ -647,7 +684,10 @@ function bindSettings() {
     }
     const title = el.songTitle.value.trim() || `导入的歌 ${settings.customSongs.length + 1}`;
     const id = `u_${Date.now().toString(36)}`;
-    settings.customSongs.unshift({ id, title, text });
+    const guess = detectStyle(text, parsed.sequence);
+    const chosen = el.songStyle.value === "auto" ? guess.styleId : el.songStyle.value;
+    const reason = el.songStyle.value === "auto" ? `自动识别：${guess.reason}` : "你选的曲风";
+    settings.customSongs.unshift({ id, title, text, style: chosen, bpm: guess.bpm, reason });
     el.songText.value = "";
     el.songTitle.value = "";
     el.importBox.open = false;
@@ -657,7 +697,7 @@ function bindSettings() {
       changed({ rerenderPads: true });
       renderSettings();
     }
-    toast(`识别到 ${parsed.lines.length} 行、${parsed.sequence.length} 个和弦，已切到「跟谱弹唱」`, 4000);
+    toast(`识别到 ${parsed.lines.length} 行、${parsed.sequence.length} 个和弦；${styleSummary(songStyle(), settings.bpm)}。已切到「跟谱弹唱」`, 6000);
   });
   el.songDelete.addEventListener("click", () => {
     const item = settings.customSongs.find((x) => x.id === settings.songId);
@@ -776,7 +816,7 @@ async function startCamera() {
   el.introCam.querySelector("span").textContent = "正在打开…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js?v=2.9");
+      const { HandTracker } = await import("./hands.js?v=3.1");
       tracker = new HandTracker(el.video, {
         onResult: onHands,
         onStatus: (s) => {
@@ -934,6 +974,58 @@ function checkAirDrum(lm, vw, vh, now) {
     toast(settings.drumsOn ? "鼓：开" : "鼓：关", 1000);
   }
   state.airDrumInside = inside;
+}
+
+// ---------------- 截图识别（本机 OCR，按需加载 Tesseract.js） ----------------
+const TESSERACT_JS = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+const TESSERACT_LANG = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/chi_sim/4.0.0_best_int";
+let ocrWorker = null;
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const tag = document.createElement("script");
+    tag.src = src;
+    tag.onload = resolve;
+    tag.onerror = reject;
+    document.head.appendChild(tag);
+  });
+}
+
+function ocrLines(data) {
+  if (data.lines?.length) return data.lines;
+  return (data.blocks || []).flatMap((b) => (b.paragraphs || []).flatMap((p) => p.lines || []));
+}
+
+async function recognizeScreenshot(file) {
+  const say = (t) => { el.ocrStatus.textContent = t; setStatus(t, "busy"); };
+  el.ocrBtn.disabled = true;
+  try {
+    if (!window.Tesseract) { say("正在下载识别程序…"); await loadScript(TESSERACT_JS); }
+    if (!ocrWorker) {
+      say("正在下载中文识别包（约 2 MB，只需一次）…");
+      ocrWorker = await window.Tesseract.createWorker("chi_sim", 1, {
+        langPath: TESSERACT_LANG,
+        logger: (m) => { if (m.status === "recognizing text") say(`识别中 ${Math.round((m.progress || 0) * 100)}%`); },
+      });
+    }
+    say("识别中…");
+    const { data } = await ocrWorker.recognize(file);
+    const sheet = sheetFromOcrLines(ocrLines(data));
+    const parsed = parseSheet(sheet);
+    el.songText.value = sheet;
+    el.importBox.open = true;
+    if (!el.songTitle.value) el.songTitle.value = file.name.replace(/\.[^.]+$/, "").slice(0, 30);
+    const guess = detectStyle(sheet, parsed.sequence);
+    el.ocrStatus.textContent = parsed.sequence.length
+      ? `识别出 ${parsed.lines.length} 行、${parsed.sequence.length} 个和弦，推荐曲风「${STYLES[guess.styleId].name}」（${guess.reason}）。请核对下面的文字，错字或认错的和弦可以直接改，然后点「识别并使用」。`
+      : "认出了文字，但没找到和弦。请确认截图里有 C、Am、G7 这样的和弦名，或者手动把和弦补进下面的文字里。";
+    el.songText.focus();
+  } catch {
+    el.ocrStatus.textContent = "识别没成功（可能网络下载识别包失败）。可以稍后再试，或直接复制文字谱粘贴。";
+  } finally {
+    el.ocrBtn.disabled = false;
+    refreshStatus();
+  }
 }
 
 // 跟谱弹唱：点按键 / 键盘跳到某个和弦并弹出来
@@ -1136,6 +1228,7 @@ function bindUi() {
       song: `跟谱弹唱「${song.title}」：伸出手指开始弹，每换一次手势走到下一个和弦（没摄像头就点下方「下一个」）`,
       auto: `自动走谱「${song.title}」：和弦每小节自动换，点「开始伴奏」跟着唱`,
     };
+    renderSongInfo();
     toast(tips[v], 4200);
   });
 
@@ -1250,4 +1343,4 @@ function init() {
 init();
 
 // 调试/测试入口
-window.airGuitar = { engine, settings, state, jumpSong, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };
+window.airGuitar = { engine, settings, state, jumpSong, recognizeScreenshot, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };

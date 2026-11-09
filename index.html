@@ -14,7 +14,7 @@
       if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
     } catch {}
   </script>
-  <link rel="stylesheet" href="./styles.css?v=2.9">
+  <link rel="stylesheet" href="./styles.css?v=3.1">
 </head>
 <body>
   <div class="app" id="app">
@@ -52,6 +52,7 @@
         <div class="hud-chord" id="hudChord">—</div>
         <div class="hud-meta" id="hudMeta">伸出 1–5 根手指</div>
         <div class="hud-next" id="hudNext" hidden></div>
+        <div class="hud-song" id="hudSong" hidden></div>
       </div>
 
       <div class="beats" id="beats" aria-hidden="true"></div>
@@ -204,15 +205,25 @@
           <details class="import" id="importBox">
             <summary>导入一首歌（粘贴文字谱）</summary>
             <div class="import-body">
+              <button type="button" class="btn small" id="ocrBtn">
+                <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M21 16l-5-5-8 8"/></svg>
+                上传截图，自动识别和弦和歌词
+              </button>
+              <p class="hint" id="ocrStatus">截图在你的设备上识别，不上传；第一次要下载约 2 MB 的中文识别包。识别完请核对一下再点「识别并使用」。</p>
               <input id="songTitle" type="text" autocomplete="off" placeholder="歌名（可不填）">
               <textarea id="songText" rows="8" spellcheck="false" placeholder="把和弦和歌词粘贴到这里，例如：&#10;[C]长亭外，[F]古道[C]边&#10;&#10;或者和弦在上、歌词在下：&#10;C        F    C&#10;长亭外    古道边"></textarea>
+              <div class="field">
+                <label for="songStyle">曲风（决定速度、扫弦还是分解、鼓）</label>
+                <select id="songStyle"></select>
+              </div>
               <div class="custom-actions">
                 <button type="button" class="btn small primary" id="songImport">识别并使用</button>
                 <button type="button" class="btn small ghost danger" id="songDelete" hidden>删除这首</button>
               </div>
-              <p class="hint" id="importHint">在有谱么等网站打开一首歌的文字版谱，选中和弦+歌词复制，粘贴进来即可。只保存在你自己的浏览器里。图片谱暂不支持识别。</p>
+              <p class="hint" id="importHint">在有谱么等网站打开一首歌的文字版谱，选中和弦+歌词复制，粘贴进来即可。只保存在你自己的浏览器里。也可以上传截图自动识别。</p>
             </div>
           </details>
+          <p class="song-style-info" id="songStyleInfo"></p>
           <div class="field">
             <label for="transpose">升降调（唱着太高或太低就调这里）</label>
             <select id="transpose"></select>
@@ -268,6 +279,6 @@
     <div class="scrim" id="scrim" hidden></div>
   </div>
 
-  <script type="module" src="./js/main.js?v=2.9"></script>
+  <script type="module" src="./js/main.js?v=3.1"></script>
 </body>
 </html>

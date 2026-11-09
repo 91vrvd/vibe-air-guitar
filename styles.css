@@ -741,3 +741,9 @@ kbd {
   .air-drum { width: min(var(--air-drum-size, 120px), 30vw); height: min(var(--air-drum-size, 120px), 30vw); }
   .air-drum svg { width: min(calc(var(--air-drum-size, 120px) * 0.32), 10vw); height: min(calc(var(--air-drum-size, 120px) * 0.32), 10vw); }
 }
+
+.hud-song { margin-top: 8px; font-size: 12px; color: var(--stage-muted); }
+.song-style-info { margin: 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--surface-2); font-size: 13px; color: var(--text); }
+.song-style-info:empty { display: none; }
+#ocrBtn { justify-content: flex-start; }
+#ocrBtn svg { width: 18px; height: 18px; }

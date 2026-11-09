@@ -8,11 +8,27 @@
 //      长亭外    古道边
 // 3. 只有和弦：C G Am F（用来练和弦走向）
 
-import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=2.9";
+import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=3.1";
+
+// 曲风：选歌或导入时自动配好速度、弹法、节奏型和鼓（用户之后仍可在设置里改）
+// 字段：bpm 速度；style 弹法 strum 扫弦 / arp 分解；strumId / arpId 见 patterns.js；drumsOn 是否开鼓；drumId 鼓型
+export const STYLES = {
+  ballad: { name: "抒情慢歌", bpm: 72, style: "arp", arpId: "slow", drumsOn: true, drumId: "ballad" },
+  folk: { name: "民谣弹唱", bpm: 88, style: "strum", strumId: "bass_folk", drumsOn: true, drumId: "folk" },
+  pop: { name: "流行", bpm: 100, style: "strum", strumId: "chop", drumsOn: true, drumId: "pop" },
+  rock: { name: "摇滚", bpm: 124, style: "strum", strumId: "rock", drumsOn: true, drumId: "rock" },
+  kids: { name: "儿歌", bpm: 96, style: "strum", strumId: "quarters", drumsOn: true, drumId: "light" },
+  waltz: { name: "三拍子（华尔兹）", bpm: 100, style: "strum", strumId: "waltz", drumsOn: true, drumId: "standard" },
+  waltz_fingers: { name: "三拍子指弹", bpm: 80, style: "arp", arpId: "waltz_arp", drumsOn: false, drumId: "light" },
+  fingerstyle: { name: "安静指弹", bpm: 76, style: "arp", arpId: "travis", drumsOn: false, drumId: "light" },
+  blues: { name: "布鲁斯", bpm: 90, style: "strum", strumId: "shuffle", drumsOn: true, drumId: "shuffle" },
+  reggae: { name: "雷鬼", bpm: 92, style: "strum", strumId: "ska", drumsOn: true, drumId: "reggae" },
+};
 
 export const BUILTIN_SONGS = [
   {
     id: "songbie",
+    style: "ballad",
     title: "送别（李叔同词，公有领域）",
     key: "C",
     text: `[C]长亭外，[F]古道[C]边，芳草碧连[G]天。
@@ -22,6 +38,7 @@ export const BUILTIN_SONGS = [
   },
   {
     id: "birthday",
+    style: "waltz",
     title: "生日快乐（公有领域）",
     key: "C",
     text: `[C]祝你生日[G]快乐，
@@ -31,6 +48,7 @@ export const BUILTIN_SONGS = [
   },
   {
     id: "twinkle",
+    style: "kids",
     title: "小星星（传统儿歌）",
     key: "C",
     text: `[C]一闪一闪[F]亮晶[C]晶，
@@ -42,6 +60,7 @@ export const BUILTIN_SONGS = [
   },
   {
     id: "amazing_grace",
+    style: "waltz_fingers",
     title: "Amazing Grace（公有领域）",
     key: "G",
     text: `A[G]mazing grace, how [C]sweet the [G]sound
@@ -49,14 +68,14 @@ That saved a wretch like [D]me
 I [G]once was lost, but [C]now am [G]found
 Was [Em]blind, but [D]now I [G]see`,
   },
-  { id: "p_pop", title: "和弦练习：流行 1-5-6-4（C G Am F）", key: "C", text: "C G Am F" },
-  { id: "p_canon", title: "和弦练习：卡农（C G Am Em F C F G）", key: "C", text: "C G Am Em F C F G" },
-  { id: "p_50s", title: "和弦练习：50 年代（C Am F G）", key: "C", text: "C Am F G" },
-  { id: "p_sad", title: "和弦练习：小调抒情（Am F C G）", key: "C", text: "Am F C G" },
-  { id: "p_jpop", title: "和弦练习：日系 4-5-3-6（F G Em Am）", key: "C", text: "F G Em Am" },
-  { id: "p_folk", title: "和弦练习：民谣 G 调（G D Em C）", key: "G", text: "G D Em C" },
-  { id: "p_251", title: "和弦练习：爵士 2-5-1（Dm7 G7 Cmaj7）", key: "C", text: "Dm7 G7 Cmaj7" },
-  { id: "p_blues", title: "和弦练习：12 小节布鲁斯（A 调）", key: "A", text: "A7 A7 A7 A7 D7 D7 A7 A7 E7 D7 A7 E7" },
+  { id: "p_pop", style: "pop", title: "和弦练习：流行 1-5-6-4（C G Am F）", key: "C", text: "C G Am F" },
+  { id: "p_canon", style: "ballad", title: "和弦练习：卡农（C G Am Em F C F G）", key: "C", text: "C G Am Em F C F G" },
+  { id: "p_50s", style: "folk", title: "和弦练习：50 年代（C Am F G）", key: "C", text: "C Am F G" },
+  { id: "p_sad", style: "ballad", title: "和弦练习：小调抒情（Am F C G）", key: "C", text: "Am F C G" },
+  { id: "p_jpop", style: "pop", title: "和弦练习：日系 4-5-3-6（F G Em Am）", key: "C", text: "F G Em Am" },
+  { id: "p_folk", style: "folk", title: "和弦练习：民谣 G 调（G D Em C）", key: "G", text: "G D Em C" },
+  { id: "p_251", style: "fingerstyle", title: "和弦练习：爵士 2-5-1（Dm7 G7 Cmaj7）", key: "C", text: "Dm7 G7 Cmaj7" },
+  { id: "p_blues", style: "blues", title: "和弦练习：12 小节布鲁斯（A 调）", key: "A", text: "A7 A7 A7 A7 D7 D7 A7 A7 E7 D7 A7 E7" },
 ];
 
 // 和弦记号：支持 C、C#m7、Bbmaj7、Dsus4、G/B（斜线低音按根音处理）
@@ -167,4 +186,86 @@ export function topChords(sequence, n = 5) {
   sequence.forEach((c) => count.set(c.name, (count.get(c.name) || 0) + 1));
   const order = [...count.keys()];
   return order.sort((a, b) => count.get(b) - count.get(a) || order.indexOf(a) - order.indexOf(b)).slice(0, n);
+}
+
+
+/**
+ * 给导入的歌猜曲风：先看谱里写没写拍号 / 速度 / 风格字样，再看小调和弦多不多。
+ * @returns {{styleId: string, bpm: number|null, reason: string}}
+ */
+export function detectStyle(text, sequence) {
+  const raw = String(text || "");
+  const bpmMatch = raw.match(/(?:BPM|bpm|拍速|速度|♩\s*=)\s*[:：=]?\s*(\d{2,3})/);
+  const bpm = bpmMatch ? Math.max(50, Math.min(180, Number(bpmMatch[1]))) : null;
+  const pick = (styleId, reason) => ({ styleId, bpm, reason });
+  if (/(3\/4|6\/8|三拍)/.test(raw)) return pick("waltz", "谱里写了三拍子");
+  const words = [
+    [/摇滚|rock/i, "rock", "谱里写了摇滚"],
+    [/布鲁斯|blues/i, "blues", "谱里写了布鲁斯"],
+    [/雷鬼|reggae/i, "reggae", "谱里写了雷鬼"],
+    [/儿歌|童谣/, "kids", "谱里写了儿歌"],
+    [/指弹|分解/, "fingerstyle", "谱里写了指弹/分解"],
+    [/民谣|folk/i, "folk", "谱里写了民谣"],
+    [/抒情|慢歌|ballad/i, "ballad", "谱里写了抒情"],
+    [/流行|pop/i, "pop", "谱里写了流行"],
+  ];
+  for (const [re, id, reason] of words) if (re.test(raw)) return pick(id, reason);
+  const names = (sequence || []).map((c) => c.name);
+  const minor = names.filter((n) => /m(?!aj)/.test(n)).length / Math.max(1, names.length);
+  if (bpm && bpm < 80) return pick("ballad", `速度 ${bpm}，偏慢`);
+  if (bpm && bpm > 116) return pick("pop", `速度 ${bpm}，偏快`);
+  if (minor >= 0.4) return pick("ballad", "小调和弦多，偏抒情");
+  return pick("folk", "没写风格，按民谣弹唱处理");
+}
+
+// ---------- 截图识别结果 → 文字谱 ----------
+// OCR 常把 m 认成 rn、把 C 认成小写
+function fixChordOcr(t) {
+  return String(t || "").trim().replace(/rn/g, "m").replace(/^([a-g])(?=$|[#bm7s])/, (c) => c.toUpperCase()).replace(/[|｜]/g, "");
+}
+
+function ocrWords(line) {
+  return (line.words || []).map((w) => ({ text: w.text.trim(), x0: w.bbox.x0, x1: w.bbox.x1, symbols: w.symbols || [] })).filter((w) => w.text);
+}
+
+function ocrIsChordLine(line) {
+  const words = ocrWords(line);
+  return words.length > 0 && words.every((w) => chordToken(fixChordOcr(w.text)));
+}
+
+function joinCjk(text) {
+  // 中文 OCR 常在字之间插空格
+  return text.replace(/([\u2e80-\uffff])\s+(?=[\u2e80-\uffff])/g, "$1").trim();
+}
+
+/**
+ * 把 Tesseract 的行/词/字符坐标转成 [C] 方括号文字谱：和弦行里每个和弦按横坐标落到下一行最近的字前面。
+ * @param lines Tesseract result.data.lines
+ */
+export function sheetFromOcrLines(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.text || !line.text.trim()) continue;
+    if (!ocrIsChordLine(line)) { out.push(joinCjk(line.text)); continue; }
+    const chords = ocrWords(line).map((w) => ({ name: chordToken(fixChordOcr(w.text)), x: w.x0 }));
+    const next = lines[i + 1];
+    if (!next || !next.text?.trim() || ocrIsChordLine(next)) {
+      out.push(chords.map((c) => `[${c.name}]`).join(" "));
+      continue;
+    }
+    const symbols = ocrWords(next).flatMap((w) => (w.symbols.length ? w.symbols.map((sy) => ({ t: sy.text, x0: sy.bbox.x0, x1: sy.bbox.x1 })) : [{ t: w.text, x0: w.x0, x1: w.x1 }]));
+    const inserts = new Map();
+    for (const c of chords) {
+      let idx = symbols.findIndex((sy) => (sy.x0 + sy.x1) / 2 >= c.x - 2);
+      if (idx < 0) idx = symbols.length;
+      inserts.set(idx, (inserts.get(idx) || "") + `[${c.name}]`);
+    }
+    let text = "";
+    symbols.forEach((sy, k) => { text += (inserts.get(k) || "") + sy.t; });
+    text += inserts.get(symbols.length) || "";
+    out.push(text);
+    i += 1;
+  }
+  return out.join("\n");
 }
