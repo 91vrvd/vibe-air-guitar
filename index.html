@@ -14,7 +14,7 @@
       if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
     } catch {}
   </script>
-  <link rel="stylesheet" href="./styles.css?v=3.1">
+  <link rel="stylesheet" href="./styles.css?v=3.2">
 </head>
 <body>
   <div class="app" id="app">
@@ -205,9 +205,17 @@
           <details class="import" id="importBox">
             <summary>导入一首歌（粘贴文字谱）</summary>
             <div class="import-body">
+              <div class="ai-box">
+                <button type="button" class="btn small primary" id="aiBtn">
+                  <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+                  AI 识谱：上传吉他谱图片（最准，可多页）
+                </button>
+                <input id="aiKey" type="password" autocomplete="off" spellcheck="false" placeholder="你的 Claude API Key（sk-ant-…）">
+                <p class="hint" id="aiStatus">由 Claude 看图识谱：和弦、小节、歌词、节奏型、速度、变调夹一起认出来，弹的时候按谱上的小节走。需要你自己的 Anthropic API Key，按用量计费（估计一页几毛钱人民币），Key 只存在这台设备的浏览器里。国内网络可能需要能访问 api.anthropic.com。</p>
+              </div>
               <button type="button" class="btn small" id="ocrBtn">
                 <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M21 16l-5-5-8 8"/></svg>
-                上传截图，自动识别和弦和歌词
+                免费识别：只认文字简单的和弦谱截图
               </button>
               <p class="hint" id="ocrStatus">截图在你的设备上识别，不上传；第一次要下载约 2 MB 的中文识别包。识别完请核对一下再点「识别并使用」。</p>
               <input id="songTitle" type="text" autocomplete="off" placeholder="歌名（可不填）">
@@ -279,6 +287,6 @@
     <div class="scrim" id="scrim" hidden></div>
   </div>
 
-  <script type="module" src="./js/main.js?v=3.1"></script>
+  <script type="module" src="./js/main.js?v=3.2"></script>
 </body>
 </html>

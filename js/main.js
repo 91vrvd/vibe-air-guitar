@@ -1,10 +1,10 @@
 import {
   allChordOptions, bindingsFromProgression, defaultBindings, normalizeChord, transposeChord, voiceChord,
-} from "./theory.js?v=3.1";
-import { BUILTIN_SONGS, STYLES, parseSheet, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.1";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.1";
-import { Engine, INSTRUMENTS } from "./audio.js?v=3.1";
-import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.1";
+} from "./theory.js?v=3.2";
+import { BUILTIN_SONGS, STYLES, parseSheet, parseRhythm, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.2";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.2";
+import { Engine, INSTRUMENTS } from "./audio.js?v=3.2";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.2";
 
 const $ = (sel) => document.querySelector(sel);
 const STORE_KEY = "airGuitar.v2";
@@ -42,6 +42,7 @@ const DEFAULTS = {
   theme: null,
   introSeen: false,
   tutorialDone: false,
+  useSheetRhythm: false,
 };
 
 function loadSettings() {
@@ -123,7 +124,7 @@ const el = {
   drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), airDrumSize: $("#airDrumSize"), countIn: $("#countIn"), drumPattern: $("#drumPattern"),
   songSelect: $("#songSelect"), songTitle: $("#songTitle"), songText: $("#songText"), songImport: $("#songImport"), songDelete: $("#songDelete"),
   importBox: $("#importBox"), transpose: $("#transpose"),
-  ocrBtn: $("#ocrBtn"), ocrStatus: $("#ocrStatus"), songStyle: $("#songStyle"), songStyleInfo: $("#songStyleInfo"), hudSong: $("#hudSong"),
+  aiBtn: $("#aiBtn"), aiKey: $("#aiKey"), aiStatus: $("#aiStatus"), ocrBtn: $("#ocrBtn"), ocrStatus: $("#ocrStatus"), songStyle: $("#songStyle"), songStyleInfo: $("#songStyleInfo"), hudSong: $("#hudSong"),
   lyrics: $("#lyrics"), lyricNow: $("#lyricNow"), lyricNext: $("#lyricNext"),
   barsSeg: $("#barsSeg"), bindings: $("#bindings"),
   holdSeg: $("#holdSeg"), stabilitySeg: $("#stabilitySeg"),
@@ -150,7 +151,16 @@ function allSongs() { return [...settings.customSongs, ...BUILTIN_SONGS]; }
 function loadSong(id, { rebind = true } = {}) {
   const src = allSongs().find((x) => x.id === id) || BUILTIN_SONGS.find((x) => x.id === DEFAULTS.songId);
   const parsed = parseSheet(src.text);
-  song = { ...src, ...parsed, key: src.key || guessKey(parsed.sequence) };
+  const meta = parsed.meta || {};
+  const styleFromMeta = Object.keys(STYLES).find((k) => k === meta.style || STYLES[k].name === meta.style);
+  song = {
+    ...src,
+    ...parsed,
+    key: src.key || meta.key || guessKey(parsed.sequence),
+    style: src.style || styleFromMeta || (meta.meter === 3 ? "waltz" : undefined),
+    bpm: src.bpm || meta.bpm || null,
+    rhythm: parseRhythm(meta.rhythm), // 谱上写的节奏，优先用
+  };
   if (!song.sequence.length) song.sequence = [{ name: "C", line: 0 }];
   settings.songId = song.id;
   state.songPos = 0;
@@ -166,8 +176,10 @@ function songChordAt(pos) {
 function songStyle() { return STYLES[song.style] || STYLES.folk; }
 
 function styleSummary(st, bpm) {
-  const how = st.style === "arp" ? `分解「${findById(ARP_PATTERNS, st.arpId).name}」` : `扫弦「${findById(STRUM_PATTERNS, st.strumId).name}」`;
-  const threeFour = (st.style === "arp" ? findById(ARP_PATTERNS, st.arpId).meter : findById(STRUM_PATTERNS, st.strumId).meter) === 3;
+  const r = song?.rhythm;
+  const how = r ? `谱上的${r.type === "arp" ? "分解" : "扫弦"}「${r.type === "arp" ? r.steps.join("") : r.pattern}」`
+    : st.style === "arp" ? `分解「${findById(ARP_PATTERNS, st.arpId).name}」` : `扫弦「${findById(STRUM_PATTERNS, st.strumId).name}」`;
+  const threeFour = r ? r.meter === 3 : (st.style === "arp" ? findById(ARP_PATTERNS, st.arpId).meter : findById(STRUM_PATTERNS, st.strumId).meter) === 3;
   const drum = !st.drumsOn ? "不开鼓" : threeFour ? "鼓「华尔兹（嘭-嚓-嚓）」" : `鼓「${findById(DRUM_PATTERNS, st.drumId).name}」`;
   return `${st.name} · ${bpm} BPM · ${how} · ${drum}`;
 }
@@ -180,6 +192,10 @@ function applySongStyle() {
   if (st.arpId) settings.arpId = st.arpId;
   settings.drumsOn = st.drumsOn;
   settings.drumId = st.drumId;
+  // 谱上写了节奏 / 变调夹，就照谱来
+  settings.useSheetRhythm = Boolean(song.rhythm);
+  if (song.rhythm) settings.style = song.rhythm.type;
+  if (song.meta?.capo !== undefined) settings.transpose = clamp(song.meta.capo, -6, 6);
   setBpm(song.bpm || st.bpm);
 }
 
@@ -246,13 +262,15 @@ function applyEngineSettings() {
   engine.spread = settings.spread;
   engine.countIn = settings.countIn;
   engine.followMode = settings.mode === "auto";
+  engine.songStrum = settings.useSheetRhythm && song?.rhythm?.type === "strum" ? song.rhythm : null;
+  engine.songArp = settings.useSheetRhythm && song?.rhythm?.type === "arp" ? song.rhythm : null;
   engine.barsPerChord = settings.barsPerChord;
   engine.progression = progressionChords();
   engine.setVolumes(settings.guitarVol / 100, settings.drumVol / 100);
 }
 
 function progressionChords() {
-  return song.sequence.map((c) => chordObj(c.name));
+  return song.sequence.map((c) => ({ ...chordObj(c.name), beats: c.beats }));
 }
 
 function neededMidis() {
@@ -628,17 +646,19 @@ function bindSettings() {
     });
   });
   onSeg(el.styleSeg, (v) => {
+    settings.useSheetRhythm = false;
     settings.style = v;
     renderSettings();
     changed();
   });
   el.strumPattern.addEventListener("change", () => {
+    settings.useSheetRhythm = false;
     settings.strumId = el.strumPattern.value;
     const p = findById(STRUM_PATTERNS, settings.strumId);
     setBpm(p.bpm);
     changed();
   });
-  el.arpPattern.addEventListener("change", () => { settings.arpId = el.arpPattern.value; changed(); });
+  el.arpPattern.addEventListener("change", () => { settings.useSheetRhythm = false; settings.arpId = el.arpPattern.value; changed(); });
   el.customKeys.addEventListener("click", (e) => {
     const b = e.target.closest("[data-step]");
     if (!b || settings.customSteps.length >= 16) return;
@@ -668,6 +688,22 @@ function bindSettings() {
     changed({ rerenderPads: true, reload: true });
   });
   el.songSelect.addEventListener("change", () => useSong(el.songSelect.value));
+  const AI_KEY = "airGuitar.aiKey";
+  try { el.aiKey.value = localStorage.getItem(AI_KEY) || ""; } catch {}
+  el.aiKey.addEventListener("change", () => { try { localStorage.setItem(AI_KEY, el.aiKey.value.trim()); } catch {} });
+  el.aiBtn.addEventListener("click", () => {
+    if (!el.aiKey.value.trim()) {
+      el.aiStatus.textContent = "先在下面填你的 Claude API Key（在 console.anthropic.com 创建），再点一次。";
+      el.aiKey.focus();
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.multiple = true;
+    input.addEventListener("change", () => { if (input.files?.length) recognizeWithAi([...input.files]); });
+    input.click();
+  });
   el.ocrBtn.addEventListener("click", () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -816,7 +852,7 @@ async function startCamera() {
   el.introCam.querySelector("span").textContent = "正在打开…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js?v=3.1");
+      const { HandTracker } = await import("./hands.js?v=3.2");
       tracker = new HandTracker(el.video, {
         onResult: onHands,
         onStatus: (s) => {
@@ -1028,6 +1064,36 @@ async function recognizeScreenshot(file) {
   }
 }
 
+// ---------------- AI 识谱（Claude 看图） ----------------
+async function recognizeWithAi(files) {
+  const say = (t) => { el.aiStatus.textContent = t; setStatus(t.slice(0, 24), "busy"); };
+  el.aiBtn.disabled = true;
+  try {
+    const { recognizeSheetWithClaude } = await import("./ai-sheet.js?v=3.2");
+    const { result, sheet } = await recognizeSheetWithClaude(files, el.aiKey.value.trim(), { onStatus: say });
+    const parsed = parseSheet(sheet);
+    el.songText.value = sheet;
+    el.songTitle.value = result.title || el.songTitle.value;
+    if (STYLES[result.style]) el.songStyle.value = result.style;
+    el.importBox.open = true;
+    const bars = parsed.sequence.reduce((n, c) => n + (c.beats || 0), 0) / (parsed.meta.meter || 4);
+    el.aiStatus.textContent = `识别完成：${parsed.lines.length} 行、${parsed.sequence.length} 个和弦、约 ${Math.round(bars)} 小节`
+      + `${result.rhythm ? `，节奏 ${result.rhythm}` : ""}${result.bpm ? `，${result.bpm} BPM` : ""}${result.capo ? `，变调夹 ${result.capo}` : ""}。`
+      + `${result.notes ? `AI 备注：${result.notes}。` : ""}核对一下下面的文字（可直接改），再点「识别并使用」。`;
+  } catch (error) {
+    const status = error?.status;
+    el.aiStatus.textContent = status === 401 ? "API Key 不对或已失效，检查一下再试。"
+      : status === 429 ? "请求太频繁或额度不够，稍后再试。"
+      : error?.code === "refusal" ? "这次没能识别（被模型拒绝），换一张更清楚的图试试。"
+      : error?.code === "too_long" ? "谱子太长，一次识别不完，分成几次上传（比如一次 2 页）。"
+      : /fetch|network|Failed to load|import/i.test(String(error?.message || error)) ? "连不上 Claude（网络或被拦截）。国内可能需要能访问 api.anthropic.com 的网络。"
+      : `识别失败：${String(error?.message || error).slice(0, 120)}`;
+  } finally {
+    el.aiBtn.disabled = false;
+    refreshStatus();
+  }
+}
+
 // 跟谱弹唱：点按键 / 键盘跳到某个和弦并弹出来
 async function jumpSong(pos) {
   await ensureAudioReady();
@@ -1090,8 +1156,7 @@ function frame(now) {
         state.heardStep = info.i;
         if (settings.mode === "auto") {
           const prog = engine.progression;
-          const bar = Math.floor(info.i / engine.stepsPerBar);
-          const idx = Math.floor(bar / settings.barsPerChord) % prog.length;
+          const idx = engine.progressIndex(info.i);
           if (idx !== state.autoPos) {
             state.autoPos = idx;
             state.heardChord = prog[idx];
@@ -1343,4 +1408,4 @@ function init() {
 init();
 
 // 调试/测试入口
-window.airGuitar = { engine, settings, state, jumpSong, recognizeScreenshot, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };
+window.airGuitar = { engine, settings, state, jumpSong, recognizeScreenshot, recognizeWithAi, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };

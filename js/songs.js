@@ -8,7 +8,7 @@
 //      长亭外    古道边
 // 3. 只有和弦：C G Am F（用来练和弦走向）
 
-import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=3.1";
+import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=3.2";
 
 // 曲风：选歌或导入时自动配好速度、弹法、节奏型和鼓（用户之后仍可在设置里改）
 // 字段：bpm 速度；style 弹法 strum 扫弦 / arp 分解；strumId / arpId 见 patterns.js；drumsOn 是否开鼓；drumId 鼓型
@@ -90,7 +90,7 @@ export function chordToken(raw) {
 }
 
 function isChordLine(line) {
-  const tokens = line.trim().split(/[\s|｜]+/).filter((x) => x && !/^[-–—.:：]+$/.test(x));
+  const tokens = line.trim().split(/[\s|｜]+/).filter((x) => x && !/^[-–—.:：%]+$/.test(x));
   return tokens.length > 0 && tokens.every((x) => chordToken(x));
 }
 
@@ -104,52 +104,119 @@ function charIndexAtColumn(text, col) {
   return text.length;
 }
 
+// 谱头信息：标题 / 速度 / 拍号 / 变调夹 / 节奏，以及常见写法 1=D 4/4、Capo=2、♩=68
+const META_LINE = /^\s*(标题|歌名|title|速度|拍速|bpm|拍号|meter|变调夹|capo|节奏|rhythm|曲风|style)\s*[:：=]\s*(.+)$/i;
+
+function parseMetaLine(line, meta) {
+  let hit = false;
+  const m = line.match(META_LINE);
+  if (m) {
+    const k = m[1].toLowerCase();
+    const v = m[2].trim();
+    if (["标题", "歌名", "title"].includes(k)) meta.title = v;
+    else if (["速度", "拍速", "bpm"].includes(k)) { const n = Number(v.match(/\d{2,3}/)?.[0]); if (n) meta.bpm = n; }
+    else if (["拍号", "meter"].includes(k)) { const n = Number(v.match(/(\d)\s*\/\s*\d/)?.[1]); if (n) meta.meter = n === 6 ? 3 : n; }
+    else if (["变调夹", "capo"].includes(k)) { const n = Number(v.match(/\d+/)?.[0]); if (!Number.isNaN(n)) meta.capo = n; }
+    else if (["节奏", "rhythm"].includes(k)) meta.rhythm = v.replace(/\s+/g, "");
+    else if (["曲风", "style"].includes(k)) meta.style = v;
+    return true;
+  }
+  // 简谱 / 六线谱谱头：1=D 4/4、Capo=2、♩=68
+  const key = line.match(/1\s*=\s*([A-G][#b]?)/);
+  if (key) { meta.key = key[1]; hit = true; }
+  const meter = line.match(/(?:^|\s)([2346])\s*\/\s*(4|8)(?:\s|$)/);
+  if (meter && (key || /拍/.test(line) || line.trim().length < 12)) { meta.meter = Number(meter[1]) === 6 ? 3 : Number(meter[1]); hit = true; }
+  const capo = line.match(/capo\s*[=:：]?\s*(\d+)/i);
+  if (capo) { meta.capo = Number(capo[1]); hit = true; }
+  const bpm = line.match(/[♩=]\s*=?\s*(\d{2,3})\b/);
+  if (bpm && /♩/.test(line)) { meta.bpm = Number(bpm[1]); hit = true; }
+  return hit && !/[\[\]]/.test(line) && line.replace(/1\s*=\s*[A-G][#b]?|[2346]\s*\/\s*[48]|capo\s*[=:：]?\s*\d+|♩\s*=\s*\d+|[,，;；\s]|用.?调指法|拍号|拍速/gi, "").length < 4;
+}
+
+/** 把谱上写的节奏变成引擎能用的：扫弦 D/U/x/B/A/-，或分解 R/A/弦号 */
+export function parseRhythm(text) {
+  const t = String(text || "").replace(/[\s|｜,，]/g, "").replace(/↓/g, "D").replace(/↑/g, "U").replace(/×/g, "x");
+  if (!t) return null;
+  if (/^[DUXxBA-]+$/.test(t) && /[DU]/.test(t)) {
+    const pattern = t.replace(/X/g, "x");
+    return pattern.length === 6 || pattern.length === 8 ? { type: "strum", pattern, meter: pattern.length / 2 } : null;
+  }
+  if (/^[RA1-6]+$/i.test(t)) {
+    const steps = [...t.toUpperCase()].map((c) => (/\d/.test(c) ? Number(c) : c));
+    return steps.length === 6 || steps.length === 8 ? { type: "arp", steps, meter: steps.length / 2 } : null;
+  }
+  return null;
+}
+
 /**
  * 解析文字谱
- * @returns {{lines: {text:string, chords:{at:number, name:string, seq:number}[]}[], sequence: {name:string, line:number}[]}}
+ * - 和弦：[C] 写在歌词里，或者和弦行在上、歌词行在下
+ * - 小节线：| 分小节；同一小节里的几个和弦平分拍子；只有歌词或写 - / % 的小节沿用上一个和弦
+ *   （整首没写 | 时，每个和弦默认一小节）
+ * - 谱头：速度、拍号、变调夹、节奏（见 parseMetaLine）
+ * @returns {{lines, sequence: {name, line, beats?}[], meta}}
  */
 export function parseSheet(input) {
   const raw = String(input || "").replace(/\r/g, "").replace(/\t/g, "    ").split("\n");
   const lines = [];
+  const meta = {};
+  const events = []; // {t:"chord"} | {t:"bar"} | {t:"text"} | {t:"hold"}
   const pushLine = (text, chords) => lines.push({ text, chords });
 
   for (let i = 0; i < raw.length; i += 1) {
     const line = raw[i].replace(/\s+$/, "");
     if (!line.trim()) continue;
+    if (parseMetaLine(line, meta)) continue;
 
-    // 写法 1：[C] 嵌在歌词里
-    if (/\[[^\]]+\]/.test(line)) {
+    // 写法 1：[C] 嵌在歌词里（可带 | 小节线）
+    if (/\[[^\]]+\]/.test(line) || /\|/.test(line) && !isChordLine(line)) {
       let text = "";
       const chords = [];
-      const re = /\[([^\]]+)\]/g;
+      const re = /\[([^\]]+)\]|\|/g;
       let last = 0;
       let m;
+      const addText = (seg) => {
+        if (!seg) return;
+        if (/^[\s\-–—%]+$/.test(seg)) { if (/[-–—%]/.test(seg)) events.push({ t: "hold" }); text += seg.replace(/[-–—%]/g, " "); return; }
+        events.push({ t: "text" });
+        text += seg;
+      };
       while ((m = re.exec(line))) {
-        text += line.slice(last, m.index);
-        const name = chordToken(m[1]);
-        if (name) chords.push({ at: text.length, name });
-        else text += m[1] ? `【${m[1]}】` : ""; // [Verse] 之类的段落名原样保留
+        addText(line.slice(last, m.index));
+        if (m[0] === "|") {
+          events.push({ t: "bar" });
+        } else {
+          const name = chordToken(m[1]);
+          if (name) { chords.push({ at: text.length, name }); events.push({ t: "chord" }); }
+          else text += m[1] ? `【${m[1]}】` : ""; // [主歌] 之类的段落名原样保留
+        }
         last = re.lastIndex;
       }
-      text += line.slice(last);
-      if (chords.length || text.trim()) pushLine(text.trim() ? text : "", chords);
+      addText(line.slice(last));
+      const clean = text.replace(/\s+$/, "");
+      const lead = clean.length - clean.trimStart().length;
+      chords.forEach((c) => { c.at = Math.max(0, Math.min(clean.trim().length, c.at - lead)); });
+      if (chords.length || clean.trim()) pushLine(clean.trim(), chords);
       continue;
     }
 
     // 写法 2：和弦行 + 歌词行
     if (isChordLine(line)) {
       const next = raw[i + 1] !== undefined ? raw[i + 1].replace(/\s+$/, "") : "";
-      const hasLyric = next.trim() && !isChordLine(next) && !/\[[^\]]+\]/.test(next);
+      const hasLyric = next.trim() && !isChordLine(next) && !/\[[^\]]+\]/.test(next) && !META_LINE.test(next);
       const chords = [];
-      const re = /\S+/g;
+      const re = /\||[^\s|｜]+/g;
       let m;
       while ((m = re.exec(line))) {
+        if (m[0] === "|") { events.push({ t: "bar" }); continue; }
+        if (/^[-–—%]+$/.test(m[0])) { events.push({ t: "hold" }); continue; }
         const name = chordToken(m[0]);
         if (!name) continue;
         chords.push({ at: hasLyric ? charIndexAtColumn(next, m.index) : 0, name });
+        events.push({ t: "chord" });
       }
       if (hasLyric) {
-        pushLine(next, chords);
+        pushLine(next.trim() ? next : "", chords);
         i += 1;
       } else {
         pushLine("", chords);
@@ -158,18 +225,41 @@ export function parseSheet(input) {
     }
 
     // 只有歌词（这一行沿用前面的和弦）
+    events.push({ t: "text" });
     pushLine(line.trim(), []);
   }
 
   const sequence = [];
   lines.forEach((ln, li) => {
-    ln.chords.sort((a, b) => a.at - b.at);
     ln.chords.forEach((c) => {
       c.seq = sequence.length;
       sequence.push({ name: c.name, line: li });
     });
   });
-  return { lines, sequence };
+
+  // 按小节线算每个和弦弹几拍
+  const meter = meta.meter || 4;
+  if (events.some((e) => e.t === "bar")) {
+    let seq = 0;
+    let bar = { chords: [], filler: false };
+    const close = () => {
+      if (bar.chords.length) {
+        const each = meter / bar.chords.length;
+        bar.chords.forEach((k) => { sequence[k].beats = (sequence[k].beats || 0) + each; });
+      } else if (bar.filler && seq > 0) {
+        sequence[seq - 1].beats = (sequence[seq - 1].beats || meter) + meter;
+      }
+      bar = { chords: [], filler: false };
+    };
+    for (const e of events) {
+      if (e.t === "chord") bar.chords.push(seq++);
+      else if (e.t === "bar") close();
+      else bar.filler = true;
+    }
+    close();
+    sequence.forEach((c) => { if (!c.beats) c.beats = meter; });
+  }
+  return { lines, sequence, meta };
 }
 
 /** 猜调：第一个和弦是大调就用它的根音，是小调就取关系大调 */

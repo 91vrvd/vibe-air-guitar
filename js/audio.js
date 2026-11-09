@@ -4,8 +4,8 @@
 // 2. 换和弦时取消尚未发声的旧和弦、重排新和弦，并按需立刻扫一下，所以既跟手又不乱拍。
 // 3. 每根弦只保留一个发声体：新音会切掉同弦旧音，像真吉他一样，也让同时发声数有上限。
 
-import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=3.1";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.1";
+import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=3.2";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.2";
 
 export const INSTRUMENTS = [
   { id: "acoustic", name: "木吉他（钢弦）", kind: "sampler" },
@@ -105,7 +105,9 @@ export class Engine {
     this.countIn = false;
     this.followMode = false; // true = 按和弦谱自动走
     this.barsPerChord = 1;
-    this.progression = []; // [{name, voicing}]
+    this.progression = []; // [{name, voicing, beats?}]：beats 是这个和弦弹几拍（来自谱上的小节线）
+    this.songStrum = null; // 谱上写的扫弦节奏 {pattern, meter}
+    this.songArp = null; // 谱上写的分解 {steps, meter}
     this.guitarVolume = 0.85;
     this.drumVolume = 0.6;
 
@@ -605,8 +607,14 @@ export class Engine {
   }
 
   // ---------- 调度 ----------
-  get strumPattern() { return findById(STRUM_PATTERNS, this.strumId); }
-  get arpPattern() { return findById(ARP_PATTERNS, this.arpId); }
+  get strumPattern() {
+    if (this.songStrum) return { id: "song", name: "谱上的节奏", pattern: this.songStrum.pattern, meter: this.songStrum.meter === 3 ? 3 : undefined, swing: 0 };
+    return findById(STRUM_PATTERNS, this.strumId);
+  }
+  get arpPattern() {
+    if (this.songArp) return { id: "song", name: "谱上的分解", steps: this.songArp.steps, meter: this.songArp.meter === 3 ? 3 : undefined };
+    return findById(ARP_PATTERNS, this.arpId);
+  }
   // 一小节几步：扫弦看节奏型拍号，分解看分解方式拍号
   get stepsPerBar() {
     const meter = this.playStyle === "arp" ? this.arpPattern.meter : this.playStyle === "strum" ? this.strumPattern.meter : null;
@@ -615,11 +623,26 @@ export class Engine {
 
   stepDuration() { return 60 / this.bpm / 2; }
 
-  chordForStep(i) {
-    if (this.followMode && this.progression.length) {
-      const bar = Math.floor(i / this.stepsPerBar);
-      return this.progression[Math.floor(bar / this.barsPerChord) % this.progression.length];
+  /** 自动走谱：第 i 步（八分音符）弹第几个和弦。谱上有小节线就按每个和弦的拍数走，否则每个和弦 barsPerChord 小节 */
+  progressIndex(i) {
+    const prog = this.progression;
+    if (!prog.length) return -1;
+    if (prog.some((c) => c.beats)) {
+      const steps = prog.map((c) => Math.max(1, Math.round((c.beats || this.stepsPerBar / 2) * 2)));
+      const total = steps.reduce((a, b) => a + b, 0);
+      let pos = ((i % total) + total) % total;
+      for (let k = 0; k < steps.length; k += 1) {
+        if (pos < steps[k]) return k;
+        pos -= steps[k];
+      }
+      return 0;
     }
+    const bar = Math.floor(i / this.stepsPerBar);
+    return Math.floor(bar / this.barsPerChord) % prog.length;
+  }
+
+  chordForStep(i) {
+    if (this.followMode && this.progression.length) return this.progression[this.progressIndex(i)];
     return this.chord;
   }
 

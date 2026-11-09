@@ -150,3 +150,27 @@ test("截图识别：和弦按横坐标落到歌词的字上", () => {
   assert.equal(sheetFromOcrLines(lines), "[C]长亭外古[Am]道边\n晚风拂柳");
 });
 console.log(`\n${passed} 组通过（含曲风/截图）`);
+
+const { parseRhythm } = await import("../js/songs.js");
+test("小节线算拍数、谱头信息、谱上的节奏", () => {
+  const r = parseSheet(`标题: 测试
+1=D 4/4
+Capo=2
+速度: 68
+节奏: R3231323
+[前奏]
+| [C] [G] | [Am] | [Fmaj7] [G] | [C] |
+| [C]听见冬天[G]的离 | [Am]开 | 我在某年 | [F]醒来 | - |`);
+  assert.equal(r.meta.title, "测试");
+  assert.equal(r.meta.capo, 2);
+  assert.equal(r.meta.bpm, 68);
+  assert.equal(r.meta.meter, 4);
+  assert.deepEqual(r.sequence.map((c) => `${c.name}:${c.beats}`), ["C:2", "G:2", "Am:4", "Fmaj7:2", "G:2", "C:4", "C:2", "G:2", "Am:8", "F:8"]);
+  assert.equal(r.lines[1].text, "【前奏】".length ? r.lines[1].text : "");
+  assert.deepEqual(parseRhythm("R3231323"), { type: "arp", steps: ["R", 3, 2, 3, 1, 3, 2, 3], meter: 4 });
+  assert.equal(parseRhythm("↓ ↓↑ ↑↓↑".replace(/ /g, "-")).pattern, "D-DU-UDU");
+  assert.equal(parseRhythm("B-DUDU").meter, 3);
+  const plain = parseSheet("C G Am F");
+  assert.equal(plain.sequence[0].beats, undefined, "没写小节线时不带拍数");
+});
+console.log(`\n${passed} 组通过（含小节）`);
