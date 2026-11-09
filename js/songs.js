@@ -8,7 +8,7 @@
 //      长亭外    古道边
 // 3. 只有和弦：C G Am F（用来练和弦走向）
 
-import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=3.2";
+import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=3.3";
 
 // 曲风：选歌或导入时自动配好速度、弹法、节奏型和鼓（用户之后仍可在设置里改）
 // 字段：bpm 速度；style 弹法 strum 扫弦 / arp 分解；strumId / arpId 见 patterns.js；drumsOn 是否开鼓；drumId 鼓型

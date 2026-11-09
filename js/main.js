@@ -1,10 +1,10 @@
 import {
   allChordOptions, bindingsFromProgression, defaultBindings, normalizeChord, transposeChord, voiceChord,
-} from "./theory.js?v=3.2";
-import { BUILTIN_SONGS, STYLES, parseSheet, parseRhythm, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.2";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.2";
-import { Engine, INSTRUMENTS } from "./audio.js?v=3.2";
-import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.2";
+} from "./theory.js?v=3.3";
+import { BUILTIN_SONGS, STYLES, parseSheet, parseRhythm, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.3";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.3";
+import { Engine, INSTRUMENTS } from "./audio.js?v=3.3";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.3";
 
 const $ = (sel) => document.querySelector(sel);
 const STORE_KEY = "airGuitar.v2";
@@ -124,7 +124,7 @@ const el = {
   drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), airDrumSize: $("#airDrumSize"), countIn: $("#countIn"), drumPattern: $("#drumPattern"),
   songSelect: $("#songSelect"), songTitle: $("#songTitle"), songText: $("#songText"), songImport: $("#songImport"), songDelete: $("#songDelete"),
   importBox: $("#importBox"), transpose: $("#transpose"),
-  aiBtn: $("#aiBtn"), aiKey: $("#aiKey"), aiStatus: $("#aiStatus"), ocrBtn: $("#ocrBtn"), ocrStatus: $("#ocrStatus"), songStyle: $("#songStyle"), songStyleInfo: $("#songStyleInfo"), hudSong: $("#hudSong"),
+  ocrBtn: $("#ocrBtn"), ocrStatus: $("#ocrStatus"), songStyle: $("#songStyle"), songStyleInfo: $("#songStyleInfo"), hudSong: $("#hudSong"),
   lyrics: $("#lyrics"), lyricNow: $("#lyricNow"), lyricNext: $("#lyricNext"),
   barsSeg: $("#barsSeg"), bindings: $("#bindings"),
   holdSeg: $("#holdSeg"), stabilitySeg: $("#stabilitySeg"),
@@ -688,22 +688,8 @@ function bindSettings() {
     changed({ rerenderPads: true, reload: true });
   });
   el.songSelect.addEventListener("change", () => useSong(el.songSelect.value));
-  const AI_KEY = "airGuitar.aiKey";
-  try { el.aiKey.value = localStorage.getItem(AI_KEY) || ""; } catch {}
-  el.aiKey.addEventListener("change", () => { try { localStorage.setItem(AI_KEY, el.aiKey.value.trim()); } catch {} });
-  el.aiBtn.addEventListener("click", () => {
-    if (!el.aiKey.value.trim()) {
-      el.aiStatus.textContent = "先在下面填你的 Claude API Key（在 console.anthropic.com 创建），再点一次。";
-      el.aiKey.focus();
-      return;
-    }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.multiple = true;
-    input.addEventListener("change", () => { if (input.files?.length) recognizeWithAi([...input.files]); });
-    input.click();
-  });
+  // 早期版本可能存过 API Key，这里顺手清掉
+  try { localStorage.removeItem("airGuitar.aiKey"); } catch {}
   el.ocrBtn.addEventListener("click", () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -852,7 +838,7 @@ async function startCamera() {
   el.introCam.querySelector("span").textContent = "正在打开…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js?v=3.2");
+      const { HandTracker } = await import("./hands.js?v=3.3");
       tracker = new HandTracker(el.video, {
         onResult: onHands,
         onStatus: (s) => {
@@ -1060,36 +1046,6 @@ async function recognizeScreenshot(file) {
     el.ocrStatus.textContent = "识别没成功（可能网络下载识别包失败）。可以稍后再试，或直接复制文字谱粘贴。";
   } finally {
     el.ocrBtn.disabled = false;
-    refreshStatus();
-  }
-}
-
-// ---------------- AI 识谱（Claude 看图） ----------------
-async function recognizeWithAi(files) {
-  const say = (t) => { el.aiStatus.textContent = t; setStatus(t.slice(0, 24), "busy"); };
-  el.aiBtn.disabled = true;
-  try {
-    const { recognizeSheetWithClaude } = await import("./ai-sheet.js?v=3.2");
-    const { result, sheet } = await recognizeSheetWithClaude(files, el.aiKey.value.trim(), { onStatus: say });
-    const parsed = parseSheet(sheet);
-    el.songText.value = sheet;
-    el.songTitle.value = result.title || el.songTitle.value;
-    if (STYLES[result.style]) el.songStyle.value = result.style;
-    el.importBox.open = true;
-    const bars = parsed.sequence.reduce((n, c) => n + (c.beats || 0), 0) / (parsed.meta.meter || 4);
-    el.aiStatus.textContent = `识别完成：${parsed.lines.length} 行、${parsed.sequence.length} 个和弦、约 ${Math.round(bars)} 小节`
-      + `${result.rhythm ? `，节奏 ${result.rhythm}` : ""}${result.bpm ? `，${result.bpm} BPM` : ""}${result.capo ? `，变调夹 ${result.capo}` : ""}。`
-      + `${result.notes ? `AI 备注：${result.notes}。` : ""}核对一下下面的文字（可直接改），再点「识别并使用」。`;
-  } catch (error) {
-    const status = error?.status;
-    el.aiStatus.textContent = status === 401 ? "API Key 不对或已失效，检查一下再试。"
-      : status === 429 ? "请求太频繁或额度不够，稍后再试。"
-      : error?.code === "refusal" ? "这次没能识别（被模型拒绝），换一张更清楚的图试试。"
-      : error?.code === "too_long" ? "谱子太长，一次识别不完，分成几次上传（比如一次 2 页）。"
-      : /fetch|network|Failed to load|import/i.test(String(error?.message || error)) ? "连不上 Claude（网络或被拦截）。国内可能需要能访问 api.anthropic.com 的网络。"
-      : `识别失败：${String(error?.message || error).slice(0, 120)}`;
-  } finally {
-    el.aiBtn.disabled = false;
     refreshStatus();
   }
 }
@@ -1408,4 +1364,4 @@ function init() {
 init();
 
 // 调试/测试入口
-window.airGuitar = { engine, settings, state, jumpSong, recognizeScreenshot, recognizeWithAi, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };
+window.airGuitar = { engine, settings, state, jumpSong, recognizeScreenshot, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };
