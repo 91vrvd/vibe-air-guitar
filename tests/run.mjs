@@ -1,21 +1,24 @@
 // 纯逻辑回归：node tests/run.mjs
 import assert from "node:assert/strict";
-import { classifyHand, GestureStabilizer } from "../js/gesture.js";
-import { voiceChord, bindingsFromProgression, splitProgression, normalizeChord, transposeProgression, defaultBindings } from "../js/theory.js";
-import { STRUM_PATTERNS, DRUM_PATTERNS } from "../js/patterns.js";
+import { classifyHand, GestureStabilizer, StrumMotionDetector, splitHands } from "../js/gesture.js";
+import {
+  voiceChord, bindingsFromProgression, dualBankFromProgression, chordFrets,
+  splitProgression, normalizeChord, transposeProgression, defaultBindings,
+} from "../js/theory.js";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS } from "../js/patterns.js";
 
 let passed = 0;
 function test(name, fn) { fn(); passed += 1; console.log("✓", name); }
 
 // 合成手：手腕在下，四指向上；rot 为整只手旋转角（弧度），模拟歪手
-function hand(up, { thumb = false, rot = 0, scale = 1 } = {}) {
+function hand(up, { thumb = false, rot = 0, scale = 1, xOffset = 0, yOffset = 0 } = {}) {
   const pts = [];
-  const wrist = { x: 0.5, y: 0.8, z: 0 };
+  const wrist = { x: 0.5 + xOffset, y: 0.8 + yOffset, z: 0 };
   const rotate = (p) => {
-    const dx = (p.x - wrist.x) * scale, dy = (p.y - wrist.y) * scale;
+    const dx = (p.x - 0.5) * scale, dy = (p.y - 0.8) * scale;
     return { x: wrist.x + dx * Math.cos(rot) - dy * Math.sin(rot), y: wrist.y + dx * Math.sin(rot) + dy * Math.cos(rot), z: p.z || 0 };
   };
-  pts[0] = wrist;
+  pts[0] = { x: 0.5, y: 0.8, z: 0 };
   // 拇指 1-4
   const tb = [{ x: 0.44, y: 0.76 }, { x: 0.40, y: 0.72 }];
   if (thumb) pts.push(...tb, { x: 0.36, y: 0.68 }, { x: 0.32, y: 0.64 });
@@ -29,14 +32,16 @@ function hand(up, { thumb = false, rot = 0, scale = 1 } = {}) {
   return pts.map(rotate);
 }
 
-test("手指计数：1-5 和握拳", () => {
+test("手指计数：1-5、握拳与点赞切页识别", () => {
   assert.equal(classifyHand(hand([1, 0, 0, 0])).count, 1);
   assert.equal(classifyHand(hand([1, 1, 0, 0])).count, 2);
   assert.equal(classifyHand(hand([1, 1, 1, 0])).count, 3);
   assert.equal(classifyHand(hand([1, 1, 1, 1])).count, 4);
   assert.equal(classifyHand(hand([1, 1, 1, 1], { thumb: true })).count, 5);
   assert.equal(classifyHand(hand([0, 0, 0, 0])).count, 0);
-  assert.equal(classifyHand(hand([0, 0, 0, 0], { thumb: true })).count, null, "点赞不触发");
+  const thumbUp = classifyHand(hand([0, 0, 0, 0], { thumb: true }));
+  assert.equal(thumbUp.count, null, "点赞不误触发普通和弦");
+  assert.equal(thumbUp.thumbOnly, true, "点赞识别为切换 A/B 页手势");
 });
 
 test("手歪 35° 和离镜头远（缩小一半）也能认", () => {
@@ -60,7 +65,27 @@ test("去抖：连续 2 帧才确认，丢手 160ms 后才算松手", () => {
   assert.equal(s.stable, null);
 });
 
-test("和弦排布像真吉他", () => {
+test("挥手扫弦检测（上下挥动方向、速度力度与冷却）", () => {
+  const det = new StrumMotionDetector({ minTravel: 0.05, minSpeed: 0.4, cooldownMs: 100 });
+  assert.equal(det.push(0.3, 0), null);
+  assert.equal(det.push(0.33, 30), null);
+  const down = det.push(0.42, 60);
+  assert.ok(down && down.dir === "D" && down.velocity >= 0.45, "向下挥动触发下扫 D");
+  assert.equal(det.push(0.50, 90), null, "冷却期内不重复触发");
+  const up = det.push(0.35, 180);
+  assert.ok(up && up.dir === "U", "向上挥动触发上扫 U");
+});
+
+test("双手分工：左右手自动分配按弦与扫弦", () => {
+  const leftOnScreen = hand([1, 0, 0, 0], { xOffset: 0.25 });  // raw x=0.75 -> mirror x=0.25 (left)
+  const rightOnScreen = hand([1, 1, 1, 1], { xOffset: -0.25 }); // raw x=0.25 -> mirror x=0.75 (right)
+  const split = splitHands([rightOnScreen, leftOnScreen], { mirror: true, swapHands: false });
+  assert.equal(split.single, false);
+  assert.equal(classifyHand(split.fretHand).count, 1);
+  assert.equal(classifyHand(split.strumHand).count, 4);
+});
+
+test("和弦排布像真吉他（含斜线低音与指板品位图）", () => {
   const frets = (name) => voiceChord(name).strings.map((m, i) => (m === null ? "x" : m - [40, 45, 50, 55, 59, 64][i])).join("");
   assert.equal(frets("C"), "x32010");
   assert.equal(frets("G"), "320003");
@@ -70,6 +95,8 @@ test("和弦排布像真吉他", () => {
   assert.equal(frets("E"), "022100");
   assert.equal(frets("Dm"), "xx0231");
   assert.equal(frets("A"), "x02220");
+  assert.equal(frets("G/B"), "x20003", "G/B 斜线和弦以 5 弦 2 品 B 为低音");
+  assert.deepEqual(chordFrets("C"), [-1, 3, 2, 0, 1, 0]);
 });
 
 test("和弦名解析与移调", () => {
@@ -81,18 +108,28 @@ test("和弦名解析与移调", () => {
   assert.deepEqual(splitProgression("C, G | Am，F"), ["C", "G", "Am", "F"]);
 });
 
-test("和弦谱分配手指：调内级数优先", () => {
+test("和弦谱分配手指与 A/B 双页 10 和弦构建", () => {
   assert.deepEqual(bindingsFromProgression(["C", "G", "Am", "F"], "C"), defaultBindings("C"));
   const b = bindingsFromProgression(["G", "D", "Em", "C"], "G");
   assert.equal(b[1], "G"); assert.equal(b[2], "D"); assert.equal(b[3], "Em"); assert.equal(b[4], "C");
   const jazz = bindingsFromProgression(["Dm7", "G7", "Cmaj7"], "C");
   assert.ok(Object.values(jazz).includes("Dm7") && Object.values(jazz).includes("G7") && Object.values(jazz).includes("Cmaj7"));
+
+  const dual = dualBankFromProgression(["C", "G", "Am", "Em", "F", "Dm", "G7", "Fmaj7"], "C");
+  const all10 = [...Object.values(dual.bankA), ...Object.values(dual.bankB)];
+  assert.equal(all10.length, 10);
+  for (const ch of ["C", "G", "Am", "Em", "F", "Dm", "G7", "Fmaj7"]) {
+    assert.ok(all10.includes(ch), `双页应包含 ${ch}`);
+  }
 });
 
 test("节奏型数据合法", () => {
   for (const p of STRUM_PATTERNS) {
     assert.match(p.pattern, /^[DUxBA-]+$/);
     assert.equal(p.pattern.length, (p.meter || 4) * 2, p.id);
+  }
+  for (const a of ARP_PATTERNS) {
+    assert.equal(a.steps.length, (a.meter || 4) * 2, a.id);
   }
   for (const d of DRUM_PATTERNS) {
     let hits = 0;
@@ -125,10 +162,10 @@ test("文字谱：斜线和弦、扩展和弦、段落名", () => {
   const r = parseSheet("[Verse]\n[Am]hello");
   assert.deepEqual(r.sequence.map((c) => c.name), ["Am"]);
 });
-test("内置歌曲都能解析，猜调和常用和弦合理", () => {
+test("内置和弦组合都能解析，猜调和常用和弦合理", () => {
   for (const s of BUILTIN_SONGS) assert.ok(parseSheet(s.text).sequence.length >= 3, s.id);
   assert.equal(guessKey(parseSheet("Am F C G").sequence), "C");
-  assert.deepEqual(topChords(parseSheet(BUILTIN_SONGS[0].text).sequence, 3), ["C", "F", "G"]);
+  assert.deepEqual(topChords(parseSheet("[C]长亭外，[F]古道[C]边，芳草碧连[G]天").sequence, 3), ["C", "F", "G"]);
 });
 console.log(`\n${passed} 组通过（含歌曲）`);
 
@@ -173,4 +210,4 @@ Capo=2
   const plain = parseSheet("C G Am F");
   assert.equal(plain.sequence[0].beats, undefined, "没写小节线时不带拍数");
 });
-console.log(`\n${passed} 组通过（含小节）`);
+console.log(`\n${passed} 组全部通过`);

@@ -2,18 +2,20 @@
 // 扫弦符号：D=下扫 U=上扫 x=切音（闷音） B=只弹根音 A=只弹交替低音 -=空拍（让前面的音继续响）
 // 分解符号：R=根音弦 A=交替低音弦 数字=弦号（1=最细的高音 e … 6=最粗的低音 E），数组=几根弦同时弹
 //
-// 2026-11 复核：按国内吉他教学和“自动挡”弹唱 App 常用的节奏型整理，去掉重复和名不副实的条目。
 // swing 是“后半拍推迟”的比例（0=平均八分，0.33≈三连音摇摆）。
 
 export const STRUM_PATTERNS = [
   { id: "folk", name: "民谣万能（下 下上 上下上）", pattern: "D-DU-UDU", bpm: 88, swing: 0 },
   { id: "bass_folk", name: "低音 + 民谣扫弦", pattern: "B-DU-UDU", bpm: 84, swing: 0 },
+  { id: "campfire", name: "篝火轻快（下 下上 下上）", pattern: "D-DUD-DU", bpm: 96, swing: 0.04 },
   { id: "quarters", name: "四分下扫（最简单）", pattern: "D-D-D-D-", bpm: 80, swing: 0 },
   { id: "eighths", name: "均匀八分（下上下上）", pattern: "DUDUDUDU", bpm: 96, swing: 0 },
   { id: "ballad", name: "抒情慢歌（低音-扫）", pattern: "B-D-A-DU", bpm: 72, swing: 0.04 },
   { id: "chop", name: "切音（流行常用）", pattern: "DUxUDUxU", bpm: 100, swing: 0 },
+  { id: "funk_chop", name: "放克切分切音", pattern: "D-xUDUxU", bpm: 104, swing: 0.06 },
   { id: "chorus", name: "副歌推进", pattern: "D-DUDUDU", bpm: 112, swing: 0 },
   { id: "country", name: "乡村低音交替", pattern: "B-DUA-DU", bpm: 104, swing: 0.06 },
+  { id: "bossa_strum", name: "波萨诺瓦律动", pattern: "B-D-UD-U", bpm: 92, swing: 0.03 },
   { id: "rock", name: "摇滚八分下扫", pattern: "DDDDDDDD", bpm: 124, swing: 0, short: true },
   { id: "ska", name: "雷鬼 / 斯卡反拍", pattern: "-U-U-U-U", bpm: 96, swing: 0.05, short: true },
   { id: "shuffle", name: "布鲁斯摇摆", pattern: "DUDUDUDU", bpm: 90, swing: 0.3 },
@@ -26,7 +28,9 @@ export const ARP_PATTERNS = [
   { id: "updown", name: "上行下行 R4321234", steps: ["R", 4, 3, 2, 1, 2, 3, 4] },
   { id: "travis", name: "交替低音（Travis 指弹）", steps: ["R", 2, "A", 1, "R", 2, "A", 1] },
   { id: "pinch", name: "掐弹（低音和高音一起）", steps: [["R", 1], 3, 2, 3, ["A", 1], 3, 2, 3] },
+  { id: "folk_pick", name: "民谣双音指弹", steps: [["R", 2], 3, 1, 3, ["A", 2], 3, 1, 3] },
   { id: "boom_chuck", name: "低音 + 和弦拨（Boom-chick）", steps: ["R", [3, 2, 1], "A", [3, 2, 1], "R", [3, 2, 1], "A", [3, 2, 1]] },
+  { id: "bossa_arp", name: "波萨诺瓦指弹", steps: [["R", 3, 2], 3, ["R", 2, 1], "A", [3, 2], 3, ["A", 2, 1], 3] },
   { id: "waltz_arp", name: "3/4 分解 R32123", steps: ["R", 3, 2, 1, 2, 3], meter: 3 },
 ];
 

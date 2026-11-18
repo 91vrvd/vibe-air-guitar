@@ -1,21 +1,26 @@
-// 音频引擎：采样/合成音色、逐弦发声、鼓、前瞻调度器。
+// 音频引擎：采样/合成音色、逐弦发声、鼓、前瞻调度器与内录导出。
 // 关键设计：
 // 1. 调度器在后台 Worker 计时，提前 ~120ms 排程，主线程卡顿也不断拍。
-// 2. 换和弦时取消尚未发声的旧和弦、重排新和弦，并按需立刻扫一下，所以既跟手又不乱拍。
-// 3. 每根弦只保留一个发声体：新音会切掉同弦旧音，像真吉他一样，也让同时发声数有上限。
+// 2. 换和弦时取消尚未发声的旧和弦、重排新和弦，并支持节拍智能量化（拍点容差内顺滑衔接，非拍点补低音/扫弦），既跟手又不断律动。
+// 3. 每根弦只保留一个发声体：新音会切掉同弦旧音；换和弦时保留共同音共鸣（Common-tone sustain），像真吉他一样自然。
+// 4. 在保留原有全部 8 种音色基础上，新增 4 种真实吉他衍生音色：温暖指弹木吉他、十二弦木吉他、爵士半空心电吉他、复古过载电吉他。
 
-import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=3.3";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.3";
+import { voiceChord, midiToFreq, OPEN_STRINGS } from "./theory.js?v=4.0";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, WALTZ_DRUM, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=4.0";
 
 export const INSTRUMENTS = [
-  { id: "acoustic", name: "木吉他（钢弦）", kind: "sampler" },
-  { id: "nylon", name: "尼龙吉他", kind: "sampler" },
-  { id: "electric", name: "电吉他（小音箱）", kind: "sampler" },
-  { id: "piano", name: "钢琴", kind: "soundfont" },
-  { id: "tinbox", name: "半岛铁盒", kind: "synth" },
+  { id: "acoustic", name: "木吉他（钢弦）", kind: "sampler", sampleKey: "acoustic" },
+  { id: "warm_acoustic", name: "温暖指弹木吉他（J-45 风格）", kind: "sampler", sampleKey: "acoustic" },
+  { id: "twelve_string", name: "十二弦木吉他（双弦共鸣）", kind: "sampler", sampleKey: "acoustic", twelve: true },
+  { id: "nylon", name: "古典尼龙吉他", kind: "sampler", sampleKey: "nylon" },
+  { id: "electric", name: "清音电吉他（小音箱）", kind: "sampler", sampleKey: "electric" },
+  { id: "jazz_electric", name: "爵士半空心电吉他（Warm Clean）", kind: "sampler", sampleKey: "electric" },
+  { id: "crunch_electric", name: "复古过载电吉他（Blues Crunch）", kind: "sampler", sampleKey: "electric" },
+  { id: "piano", name: "三角钢琴", kind: "soundfont" },
+  { id: "tinbox", name: "半岛铁盒（八音盒）", kind: "synth" },
   { id: "glassbell", name: "玻璃铃", kind: "synth" },
   { id: "celeste", name: "星光琴", kind: "synth" },
-  { id: "violin", name: "小提琴", kind: "soundfont" },
+  { id: "violin", name: "独奏小提琴", kind: "soundfont" },
 ];
 
 const range = (a, b, step = 1) => Array.from({ length: Math.floor((b - a) / step) + 1 }, (_, i) => a + i * step);
@@ -48,14 +53,18 @@ const SAMPLERS = {
   },
 };
 
-// 每种音色走哪条声音链：dry 直出、body 琴箱共鸣、amp 音箱模拟、verb 房间混响
+// 每种音色走哪条声音链：dry 直出、body 琴箱共鸣、amp 清音音箱、crunch 过载音箱、verb 房间混响、bright 滤波覆盖
 const TONES = {
-  acoustic: { dry: 1, body: 0.3, amp: 0, verb: 0.14 },
-  nylon: { dry: 1, body: 0.25, amp: 0, verb: 0.15 },
-  electric: { dry: 0, body: 0, amp: 1, verb: 0.22 },
-  piano: { dry: 1, body: 0, amp: 0, verb: 0.18 },
-  violin: { dry: 1, body: 0, amp: 0, verb: 0.22 },
-  synth: { dry: 1, body: 0, amp: 0, verb: 0.08 },
+  acoustic:        { dry: 1.0,  body: 0.30, amp: 0,    crunch: 0,    verb: 0.14 },
+  warm_acoustic:   { dry: 0.88, body: 0.52, amp: 0,    crunch: 0,    verb: 0.20, bright: [1200, 5600], gain: 1.85 },
+  twelve_string:   { dry: 0.95, body: 0.34, amp: 0,    crunch: 0,    verb: 0.22, bright: [2200, 12500], gain: 1.45 },
+  nylon:           { dry: 1.0,  body: 0.25, amp: 0,    crunch: 0,    verb: 0.15 },
+  electric:        { dry: 0,    body: 0,    amp: 1.0,  crunch: 0,    verb: 0.22 },
+  jazz_electric:   { dry: 0.25, body: 0.22, amp: 0.85, crunch: 0,    verb: 0.26, bright: [1100, 3800], gain: 1.1 },
+  crunch_electric: { dry: 0,    body: 0,    amp: 0.2,  crunch: 0.95, verb: 0.20, bright: [2200, 7500], gain: 0.9 },
+  piano:           { dry: 1.0,  body: 0,    amp: 0,    crunch: 0,    verb: 0.18 },
+  violin:          { dry: 1.0,  body: 0,    amp: 0,    crunch: 0,    verb: 0.22 },
+  synth:           { dry: 1.0,  body: 0,    amp: 0,    crunch: 0,    verb: 0.08 },
 };
 
 const SOUNDFONT_BASE = {
@@ -105,9 +114,9 @@ export class Engine {
     this.countIn = false;
     this.followMode = false; // true = 按和弦谱自动走
     this.barsPerChord = 1;
-    this.progression = []; // [{name, voicing, beats?}]：beats 是这个和弦弹几拍（来自谱上的小节线）
-    this.songStrum = null; // 谱上写的扫弦节奏 {pattern, meter}
-    this.songArp = null; // 谱上写的分解 {steps, meter}
+    this.progression = []; // [{name, voicing, beats?}]
+    this.songStrum = null;
+    this.songArp = null;
     this.guitarVolume = 0.85;
     this.drumVolume = 0.6;
 
@@ -117,15 +126,18 @@ export class Engine {
     this.nextTime = 0;
     this.stepLog = []; // 已排程但可能未发声的步：{i, t, voices}
     this.uiQueue = [];
+    this.stringActivity = new Float32Array(6); // 每根弦最新触发时间戳（performance.now），供可视化琴弦振动使用
     this.voices = [];
     this.stringVoices = new Array(6).fill(null);
     this.buffers = new Map(); // url -> AudioBuffer（已解码）
     this.loading = new Map(); // url -> Promise
     this.onsets = new WeakMap();
-    this.peaks = new WeakMap(); // 外部音源（钢琴/小提琴）录得很轻，按峰值补齐响度
+    this.peaks = new WeakMap();
     this.pluckCache = new Map();
     this.rr = 0;
     this.onLoadState = null; // (state, detail) 回调
+    this.recorder = null;
+    this.recordChunks = [];
     this.ticker = makeTicker(() => this.tick());
   }
 
@@ -143,15 +155,22 @@ export class Engine {
     comp.release.value = 0.18;
     this.master = ctx.createGain();
     this.master.gain.value = 0.92;
+    this.outNode = comp;
     this.master.connect(comp).connect(ctx.destination);
+    // 录音输出支路（按需连接 MediaStreamDestination）
+    if (ctx.createMediaStreamDestination) {
+      try {
+        this.recordDest = ctx.createMediaStreamDestination();
+        comp.connect(this.recordDest);
+      } catch {}
+    }
     this.guitarBus = ctx.createGain();
     this.guitarBus.gain.value = this.guitarVolume;
     this.guitarBus.connect(this.master);
     this.drumBus = ctx.createGain();
     this.drumBus.gain.value = this.drumVolume;
     this.drumBus.connect(this.master);
-    // 声音链：每根弦 → 声像 → guitarIn → {直出 | 琴箱共鸣 | 音箱模拟} → guitarBus(音量) → master
-    //                                                              ↘ 房间混响（发送）
+    // 声音链：每根弦 → 声像 → guitarIn → {直出 | 琴箱共鸣 | 清音音箱 | 过载音箱} → guitarBus(音量) → master
     this.guitarIn = ctx.createGain();
     this.stringPans = OPEN_STRINGS.map((_, idx) => {
       const node = ctx.createStereoPanner ? ctx.createStereoPanner() : ctx.createGain();
@@ -161,20 +180,19 @@ export class Engine {
     });
     this.dryGain = ctx.createGain();
     this.guitarIn.connect(this.dryGain).connect(this.guitarBus);
-    // 琴箱：短冲激响应，几个箱体共振峰（Helmholtz ~100Hz、面板 ~200/400Hz 等）
+    // 琴箱：短冲激响应，几个箱体共振峰
     this.bodyConv = ctx.createConvolver();
     this.bodyConv.buffer = makeBodyIR(ctx);
     this.bodyGain = ctx.createGain();
     this.guitarIn.connect(this.bodyConv).connect(this.bodyGain).connect(this.guitarBus);
-    // 电吉他（干净音色）：压缩器拉长余音（原始采样 1 秒内就衰减 25dB，听着发干）
-    // → 很轻的电子管式温暖 → 1x12 音箱频响。不用重失真：多根弦叠进失真会互相调制，扫弦发糊。
+    // 电吉他（干净音色）：压缩器拉长余音 → 轻度电子管温暖 → 1x12 音箱频响
     this.ampIn = ctx.createGain();
     const pre = biquad(ctx, "highpass", 90, 0.5);
     const ampComp = ctx.createDynamicsCompressor();
     ampComp.threshold.value = -30;
     ampComp.knee.value = 12;
     ampComp.ratio.value = 5;
-    ampComp.attack.value = 0.012; // 让拨弦起音先过去
+    ampComp.attack.value = 0.012;
     ampComp.release.value = 0.3;
     const drive = ctx.createGain();
     drive.gain.value = 1.4;
@@ -190,7 +208,24 @@ export class Engine {
     ampOut.gain.value = 0.7;
     this.guitarIn.connect(this.ampIn).connect(pre).connect(ampComp).connect(drive).connect(shaper)
       .connect(cabHp).connect(cabMid).connect(cabPres).connect(cabLp).connect(cabLp2).connect(ampOut).connect(this.guitarBus);
-    // 房间混响：程序生成的冲激响应（无版权问题），吉他和鼓少量发送
+
+    // 复古过载电吉他（Blues Crunch）：中频激励 + 非对称电子管过载 + 2x12 箱体滤波
+    this.crunchIn = ctx.createGain();
+    const crPre = biquad(ctx, "highpass", 130, 0.7);
+    const crMidBoost = biquad(ctx, "peaking", 820, 1.1, 4.5);
+    const crShaper = ctx.createWaveShaper();
+    crShaper.curve = makeDriveCurve(2.6);
+    crShaper.oversample = "2x";
+    const crCabHp = biquad(ctx, "highpass", 95, 0.75);
+    const crCabScoop = biquad(ctx, "peaking", 480, 1.0, -2.0);
+    const crCabBite = biquad(ctx, "peaking", 2200, 0.9, 3.0);
+    const crCabLp = biquad(ctx, "lowpass", 5200, 0.8);
+    const crOut = ctx.createGain();
+    crOut.gain.value = 0.54;
+    this.guitarIn.connect(this.crunchIn).connect(crPre).connect(crMidBoost).connect(crShaper)
+      .connect(crCabHp).connect(crCabScoop).connect(crCabBite).connect(crCabLp).connect(crOut).connect(this.guitarBus);
+
+    // 房间混响：程序生成的冲激响应
     this.reverb = ctx.createConvolver();
     this.reverb.buffer = makeRoomIR(ctx);
     const verbReturn = ctx.createGain();
@@ -201,7 +236,7 @@ export class Engine {
     const drumVerb = ctx.createGain();
     drumVerb.gain.value = 0.07;
     this.drumBus.connect(drumVerb).connect(this.reverb);
-    // 共享回声（合成音色用），避免每个音建一套 delay
+    // 共享回声（合成音色用）
     this.fxSend = ctx.createGain();
     const delay = ctx.createDelay(1);
     const feedback = ctx.createGain();
@@ -232,7 +267,15 @@ export class Engine {
     const inst = INSTRUMENTS.find((i) => i.id === this._instrument);
     const tone = TONES[this._instrument] || (inst?.kind === "synth" ? TONES.synth : TONES.acoustic);
     const t = this.ctx.currentTime;
-    for (const [node, v] of [[this.dryGain, tone.dry], [this.bodyGain, tone.body], [this.ampIn, tone.amp], [this.verbSend, tone.verb]]) {
+    const pairs = [
+      [this.dryGain, tone.dry ?? 1],
+      [this.bodyGain, tone.body ?? 0],
+      [this.ampIn, tone.amp ?? 0],
+      [this.crunchIn, tone.crunch ?? 0],
+      [this.verbSend, tone.verb ?? 0.14],
+    ];
+    for (const [node, v] of pairs) {
+      if (!node) continue;
       if (immediate) node.gain.value = v;
       else node.gain.setTargetAtTime(v, t, 0.03);
     }
@@ -241,7 +284,6 @@ export class Engine {
   async unlock() {
     const ctx = this.ensure();
     try {
-      // iOS：静音键打开时也让网页出声
       if (navigator.audioSession) navigator.audioSession.type = "playback";
     } catch {}
     if (ctx.state !== "running") {
@@ -264,6 +306,46 @@ export class Engine {
     this.drumBus.gain.setTargetAtTime(drums, t, 0.02);
   }
 
+  // ---------- 录音导出 ----------
+  get isRecording() {
+    return Boolean(this.recorder && this.recorder.state === "recording");
+  }
+
+  startRecording() {
+    this.ensure();
+    if (!this.recordDest || typeof MediaRecorder === "undefined") return false;
+    if (this.isRecording) return true;
+    this.recordChunks = [];
+    const mimeTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", ""];
+    let rec = null;
+    for (const mime of mimeTypes) {
+      try {
+        rec = mime ? new MediaRecorder(this.recordDest.stream, { mimeType: mime }) : new MediaRecorder(this.recordDest.stream);
+        break;
+      } catch {}
+    }
+    if (!rec) return false;
+    rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) this.recordChunks.push(e.data); };
+    rec.start(200);
+    this.recorder = rec;
+    return true;
+  }
+
+  stopRecording() {
+    return new Promise((resolve) => {
+      if (!this.recorder || this.recorder.state === "inactive") { resolve(null); return; }
+      const rec = this.recorder;
+      rec.onstop = () => {
+        const type = rec.mimeType || "audio/webm";
+        const blob = new Blob(this.recordChunks, { type });
+        this.recordChunks = [];
+        this.recorder = null;
+        resolve(blob.size > 0 ? blob : null);
+      };
+      try { rec.stop(); } catch { resolve(null); }
+    });
+  }
+
   // ---------- 采样加载 ----------
   loadBuffer(url) {
     if (this.buffers.has(url)) return Promise.resolve(this.buffers.get(url));
@@ -283,35 +365,37 @@ export class Engine {
         return buffer;
       })
       .catch(() => {
-        this.loading.delete(url); // 允许下次重试
+        this.loading.delete(url);
         return null;
       });
     this.loading.set(url, promise);
     return promise;
   }
 
-  /** 预加载当前音色：先下当前和弦要用的音，再在后台补齐其余。没加载完也能弹（合成拨弦兜底）。 */
-  async loadInstrument(id = this.instrument, neededMidis = []) {
+  /** 预加载当前音色：先下当前和弦要用的音，再在后台补齐其余（lite 省流模式下不后台预拉未用到的采样）。没加载完也能弹（合成拨弦兜底）。 */
+  async loadInstrument(id = this.instrument, neededMidis = [], { lite = false } = {}) {
     this.ensure();
     const inst = INSTRUMENTS.find((i) => i.id === id);
     const needed = [];
     const rest = [];
     const wanted = new Set(neededMidis);
     if (inst?.kind === "sampler") {
-      const s = SAMPLERS[id];
+      const sKey = inst.sampleKey || id;
+      const s = SAMPLERS[sKey];
       const neededZones = new Set([...wanted].map((m) => nearestZone(s.zones, m)));
-      s.zones.forEach((z) => (s.layers || [0]).forEach((l) => (neededZones.has(z) ? needed : rest).push(s.base + s.file(z, l))));
+      const layers = lite && s.layers ? [s.layers[0]] : (s.layers || [0]);
+      s.zones.forEach((z) => layers.forEach((l) => (neededZones.has(z) ? needed : rest).push(s.base + s.file(z, l))));
     } else if (inst?.kind === "soundfont") {
       wanted.forEach((m) => needed.push(this.soundfontUrl(id, m)));
     }
-    // 释放其它音色已解码的采样（每个约 0.8MB 内存），手机上来回切音色也不会越占越多
-    const keepPrefix = inst?.kind === "sampler" ? SAMPLERS[id].base : SOUNDFONT_BASE[id] || null;
+    const sKey = inst?.sampleKey || id;
+    const keepPrefix = inst?.kind === "sampler" ? SAMPLERS[sKey].base : SOUNDFONT_BASE[id] || null;
     for (const url of [...this.buffers.keys()]) {
       if (keepPrefix && url.startsWith(keepPrefix)) continue;
       this.buffers.delete(url);
     }
     const pending = needed.filter((u) => !this.buffers.has(u));
-    const later = rest.filter((u) => !this.buffers.has(u));
+    const later = lite ? [] : rest.filter((u) => !this.buffers.has(u));
     if (!pending.length) {
       this.onLoadState?.("ready", inst?.name);
       later.forEach((u) => this.loadBuffer(u));
@@ -335,31 +419,33 @@ export class Engine {
   }
 
   // ---------- 单音 ----------
-  /**
-   * 弹一个音。dur 为空 = 让它自然延音到采样结束（被同弦新音或止音打断）；
-   * dead = 闷音/死音：极短 + 发闷。
-   */
-  playNote(midi, t, vel, { string = null, dur = null, dead = false, soft = 0 } = {}) {
+  playNote(midi, t, vel, { string = null, dur = null, dead = false, soft = 0, noDamp = false, detuneCents = 0 } = {}) {
     const ctx = this.ctx;
     const inst = INSTRUMENTS.find((i) => i.id === this.instrument) || INSTRUMENTS[0];
     const out = string !== null ? this.stringPans[string] : this.guitarIn;
-    // 同一根弦再响：旧音约 0.1 秒内收掉（真吉他重新拨弦也是这样），不是一刀切
-    if (string !== null) this.dampString(string, t, dead ? 0.01 : 0.03);
+    if (string !== null && !noDamp) this.dampString(string, t, dead ? 0.01 : 0.03);
+    if (string !== null && ctx) {
+      const delayMs = Math.max(0, (t - ctx.currentTime) * 1000);
+      if (delayMs < 15) this.stringActivity[string] = performance.now();
+      else setTimeout(() => { this.stringActivity[string] = performance.now(); }, delayMs);
+    }
 
-    if (inst.kind === "synth") return this.track(this.playSynth(midi, t, vel, dur || 2.4, out), string);
+    if (inst.kind === "synth") return this.track(this.playSynth(midi, t, vel, dur || 2.4, out), noDamp ? null : string, midi);
 
     let buffer = null;
     let rate = 1;
     let gainScale = 1;
     let bright = null;
+    const tone = TONES[inst.id] || {};
     if (inst.kind === "sampler") {
-      const s = SAMPLERS[inst.id];
+      const sKey = inst.sampleKey || inst.id;
+      const s = SAMPLERS[sKey];
       const zone = nearestZone(s.zones, midi);
       const layer = s.layers ? s.layers[(this.rr++) % s.layers.length] : 0;
       buffer = this.buffers.get(s.base + s.file(zone, layer));
       rate = 2 ** ((midi - zone) / 12);
-      gainScale = s.gain;
-      bright = s.bright;
+      gainScale = tone.gain ?? s.gain;
+      bright = tone.bright || s.bright;
     } else {
       const url = this.soundfontUrl(inst.id, midi);
       buffer = this.buffers.get(url);
@@ -367,13 +453,13 @@ export class Engine {
       gainScale = inst.id === "violin" ? 0.6 : 0.85;
     }
     if (buffer && inst.kind === "soundfont") gainScale *= Math.min(8, 0.7 / Math.max(0.02, this.peaks.get(buffer) || 0.7));
-    if (!buffer) return this.track(this.playPluck(midi, t, vel, dur || 2.4, out), string);
+    if (!buffer) return this.track(this.playPluck(midi, t, vel, dur || 2.4, out), noDamp ? null : string, midi);
 
     const src = ctx.createBufferSource();
     const g = ctx.createGain();
     src.buffer = buffer;
-    // 每次轻微不同（音高 ±3 音分、起点 0–3ms），代替真实采样的轮换层，避免“机关枪”感
-    if (this.humanize) rate *= 2 ** (((Math.random() - 0.5) * 6) / 1200);
+    if (this.humanize) rate *= 2 ** (((Math.random() - 0.5) * 6 + detuneCents) / 1200);
+    else if (detuneCents) rate *= 2 ** (detuneCents / 1200);
     src.playbackRate.value = rate;
     let node = src;
     if (bright) {
@@ -384,8 +470,6 @@ export class Engine {
       node = node.connect(lp);
     }
     const level = (dead ? 0.26 : 0.32) * vel * gainScale;
-    // soft：扫弦里的弦——跳过单独拨弦那一下“叮”的起音，再用几毫秒淡入。
-    // 逐个独立拨弦的采样直接叠在一起会像竖琴/琶音，扫弦的“刷”感靠拨片声统一给出。
     if (soft) {
       g.gain.setValueAtTime(0, t);
       g.gain.linearRampToValueAtTime(level, t + soft * 0.6);
@@ -401,10 +485,28 @@ export class Engine {
     const end = t + length + (dur ? 0.25 : 0.02);
     src.stop(end);
     src.onended = () => { g.disconnect(); if (node !== src) node.disconnect(); };
-    return this.track({ src, g, start: t, end }, string);
+    const voice = this.track({ src, g, start: t, end, midi }, noDamp ? null : string, midi);
+
+    // 十二弦木吉他：低 4 根弦（6-3弦）叠加高八度副弦，高 2 根弦（2-1弦）叠加微失谐同度副弦
+    if (inst.twelve && !noDamp && !dead) {
+      const isOctaveCourse = string !== null && string <= 3 && midi + 12 <= 76;
+      const companionMidi = isOctaveCourse ? midi + 12 : midi;
+      const companionVel = vel * (isOctaveCourse ? 0.48 : 0.52);
+      const companionDetune = isOctaveCourse ? 5 : 9;
+      this.playNote(companionMidi, t + 0.004, companionVel, {
+        string,
+        dur,
+        dead: false,
+        soft: soft + 0.002,
+        noDamp: true,
+        detuneCents: companionDetune,
+      });
+    }
+
+    return voice;
   }
 
-  /** 拨片蹭过琴弦的沙沙声：真吉他扫弦“有手感”的关键之一 */
+  /** 拨片蹭过琴弦的沙沙声 */
   pickNoise(t, length, level, dir = "D") {
     const ctx = this.ctx;
     const src = ctx.createBufferSource();
@@ -425,9 +527,10 @@ export class Engine {
     return { src, g, start: t, end };
   }
 
-  track(voice, string) {
+  track(voice, string, midi = null) {
     if (!voice) return null;
     voice.string = string;
+    if (midi !== null) voice.midi = midi;
     this.voices.push(voice);
     if (string !== null) this.stringVoices[string] = voice;
     return voice;
@@ -436,6 +539,25 @@ export class Engine {
   dampString(string, t, tc) {
     const prev = this.stringVoices[string];
     if (prev && prev.end > t) this.damp(prev, t, tc);
+  }
+
+  /**
+   * 换和弦时智能止音：保留新旧和弦在同弦同品的共同音（Common-tone sustain），只止住变化的弦。
+   * 这样像 C -> Am、G -> Em 这类有大量共同音的和弦切换会像真吉他一样丝滑不断音。
+   */
+  dampChangedStrings(nextVoicing, t, tc = 0.035) {
+    if (!nextVoicing) {
+      this.dampAll(t, tc);
+      return;
+    }
+    for (let s = 0; s < 6; s += 1) {
+      const prev = this.stringVoices[s];
+      if (!prev || prev.end <= t) continue;
+      const nextMidi = nextVoicing.strings[s] !== null ? this.shift(nextVoicing.strings[s]) : null;
+      if (nextMidi === null || prev.midi !== nextMidi) {
+        this.damp(prev, t, tc);
+      }
+    }
   }
 
   damp(voice, t, tc = 0.03) {
@@ -473,7 +595,7 @@ export class Engine {
     const end = t + Math.min(dur + 0.6, buffer.duration);
     src.stop(end);
     src.onended = () => g.disconnect();
-    return { src, g, start: t, end };
+    return { src, g, start: t, end, midi };
   }
 
   playSynth(midi, t, vel, dur, out) {
@@ -510,7 +632,7 @@ export class Engine {
     body.start(t); over.start(t);
     body.stop(end); over.stop(end);
     body.onended = () => { g.disconnect(); sendLevel.disconnect(); filter.disconnect(); overGain.disconnect(); };
-    return { src: body, g, start: t, end, extra: over };
+    return { src: body, g, start: t, end, extra: over, midi };
   }
 
   // ---------- 和弦动作 ----------
@@ -522,11 +644,9 @@ export class Engine {
     if (dir === "D") {
       for (let i = voicing.bassString; i < 6; i += 1) if (strings[i] !== null) order.push(i);
     } else {
-      // 上扫通常只扫到高音 3–4 根弦
       const reach = accent > 0.85 ? 4 : 3;
       for (let i = 5; i >= Math.max(voicing.bassString, 6 - reach); i -= 1) if (strings[i] !== null) order.push(i);
     }
-    // 真人扫一下 6 根弦大约 25–45ms：越用力越快，手腕在加速，弦间隔逐渐变短
     let gap = this.spread ? (dir === "D" ? 0.0085 - 0.003 * accent : 0.006 - 0.002 * accent) : 0.002;
     const voices = [];
     let at = t;
@@ -535,15 +655,12 @@ export class Engine {
       const span = Math.max(0.012, gap * order.length);
       voices.push(this.pickNoise(t, span, (short ? 0.018 : 0.03) * accent, dir));
     }
-    // 多根弦同时响，单根力度要比单音拨弦小，不然一扫就把总线压缩器顶得一抽一抽
     const stack = 0.7;
     order.forEach((idx, n) => {
       const jitter = this.humanize ? (Math.random() - 0.5) * 0.002 : 0;
       const velJitter = this.humanize ? 0.92 + Math.random() * 0.14 : 1;
-      // 下扫：先碰到的低音弦最实，往后略轻；上扫：最先碰到的高音弦最实
       const shape = dir === "D" ? 1 - n * 0.04 : 0.9 - n * 0.07;
       const vel = Math.max(0.1, Math.min(1, accent * shape * velJitter * stack));
-      // 第一根弦保留一点起音（拨片碰到的瞬间），后面的弦越来越“刷”
       const soft = isGuitar ? (n === 0 ? 0.002 : 0.006 + Math.min(n, 4) * 0.0015) : 0;
       const v = this.playNote(this.shift(strings[idx]), Math.max(t, at + jitter), vel, { string: idx, dur: short ? 0.18 : null, soft });
       if (v) voices.push(v);
@@ -551,6 +668,23 @@ export class Engine {
       gap *= 0.93;
     });
     return voices;
+  }
+
+  /** 手动挥动扫弦 / 触控划弦（立即触发，带真实力度与共同音顺滑过渡） */
+  manualStrum(chord, dir = "D", velocity = 0.88) {
+    if (!this.ctx || !chord?.voicing) return;
+    const now = this.ctx.currentTime + 0.003;
+    this.dampChangedStrings(chord.voicing, now, 0.025);
+    this.strum(chord.voicing, now, dir, velocity);
+  }
+
+  /** 手动拨单根弦（0=6弦低音E .. 5=1弦高音e） */
+  manualPluckString(chord, stringIdx, velocity = 0.85) {
+    if (!this.ctx || !chord?.voicing) return;
+    const midi = chord.voicing.strings[stringIdx];
+    if (midi === null || midi === undefined) return;
+    const now = this.ctx.currentTime + 0.002;
+    this.playNote(this.shift(midi), now, velocity, { string: stringIdx });
   }
 
   /** 闷音扫弦：左手虚按，所有弦发出短促的“咔” */
@@ -589,15 +723,14 @@ export class Engine {
 
   pluckString(voicing, t, spec, vel) {
     if (Array.isArray(spec)) {
-      // 几根弦同时拨（掐弹、和弦拨），每根稍轻
       return spec.flatMap((one, n) => this.pluckString(voicing, t + n * 0.003, one, vel * (spec.length > 1 ? 0.8 : 1)));
     }
-    const root = voicing.bassString; // 索引：0 = 6 弦
+    const root = voicing.bassString;
     let idx;
     if (spec === "R") idx = root;
     else if (spec === "A") idx = Math.min(root + (root === 0 ? 2 : 1), 3);
     else idx = 6 - Number(spec);
-    if (idx < root) idx = root + ((idx + 6 - root) % (6 - root)); // 根音以下的弦不弹，折回
+    if (idx < root) idx = root + ((idx + 6 - root) % (6 - root));
     let note = voicing.strings[idx];
     if (note === null) note = voicing.strings.find((n) => n !== null);
     const v = this.playNote(this.shift(note), t, vel, { string: idx });
@@ -615,7 +748,6 @@ export class Engine {
     if (this.songArp) return { id: "song", name: "谱上的分解", steps: this.songArp.steps, meter: this.songArp.meter === 3 ? 3 : undefined };
     return findById(ARP_PATTERNS, this.arpId);
   }
-  // 一小节几步：扫弦看节奏型拍号，分解看分解方式拍号
   get stepsPerBar() {
     const meter = this.playStyle === "arp" ? this.arpPattern.meter : this.playStyle === "strum" ? this.strumPattern.meter : null;
     return (meter || 4) * 2;
@@ -623,7 +755,6 @@ export class Engine {
 
   stepDuration() { return 60 / this.bpm / 2; }
 
-  /** 自动走谱：第 i 步（八分音符）弹第几个和弦。谱上有小节线就按每个和弦的拍数走，否则每个和弦 barsPerChord 小节 */
   progressIndex(i) {
     const prog = this.progression;
     if (!prog.length) return -1;
@@ -653,7 +784,7 @@ export class Engine {
     if (chord.custom) {
       if (slot !== 0) return [];
       const src = this.ctx.createBufferSource();
-      const g = this.ctx.createGain();
+      const g = ctx.createGain();
       src.buffer = chord.custom;
       g.gain.value = 0.8;
       src.connect(g).connect(this.guitarBus);
@@ -668,7 +799,6 @@ export class Engine {
       const stroke = pattern[slot % pattern.length];
       if (stroke === "-") return [];
       if (stroke === "x") return this.chuck(t, accent, chord.voicing);
-      // B / A：只弹根音 / 交替低音，后面的扫弦接上（低音扫弦）
       if (stroke === "B" || stroke === "A") return this.pluckString(chord.voicing, t, stroke === "B" ? "R" : "A", 0.85 * accent);
       return this.strum(chord.voicing, t, stroke, accent * (stroke === "U" ? 0.82 : 1), { short: Boolean(this.strumPattern.short) });
     }
@@ -772,7 +902,6 @@ export class Engine {
   tick() {
     if (!this.running || !this.ctx) return;
     const now = this.ctx.currentTime;
-    // 主线程长时间卡住后，跳过已经过去的拍子，避免一次性补一堆音
     if (this.nextTime < now - 0.05) {
       const dur = this.stepDuration();
       const skip = Math.ceil((now - this.nextTime) / dur);
@@ -781,7 +910,6 @@ export class Engine {
     }
     while (this.nextTime < now + LOOKAHEAD) {
       this.scheduleStep(this.step, this.nextTime);
-      // swing：后半拍推迟的比例（0.3 左右就是三连音式的摇摆）
       const swing = this.playStyle === "strum" ? this.strumPattern.swing || 0 : 0;
       this.nextTime += this.stepDuration() * (1 + (this.step % 2 === 0 ? swing : -swing));
       this.step += 1;
@@ -814,7 +942,7 @@ export class Engine {
     this.uiQueue = [];
   }
 
-  /** 取消尚未发声的吉他音；rerender=true 时不重排 */
+  /** 取消尚未发声的吉他音 */
   cancelFuture(now, dropOnly = false) {
     const future = this.stepLog.filter((s) => s.t > now + 0.002);
     for (const s of future) {
@@ -829,8 +957,12 @@ export class Engine {
     return future;
   }
 
-  /** 设定手势和弦。null = 松手。 */
-  setChord(next) {
+  /**
+   * 设定手势和弦。null = 松手。
+   * @param next 新和弦对象
+   * @param {{silentPreview?: boolean}} [opts] silentPreview=true 时（如挥手扫弦模式）只换左手按弦，不自动发声，等挥手才响
+   */
+  setChord(next, { silentPreview = false } = {}) {
     const prevName = this.chord?.name || null;
     const prevCustom = this.chord?.custom || null;
     this.chord = next;
@@ -840,9 +972,13 @@ export class Engine {
     const now = this.ctx.currentTime;
 
     if (!this.running || this.followMode) {
-      if (this.running) return; // 自动走谱时手势只做提示
+      if (this.running) return;
       if (next) {
-        this.preview(next);
+        if (silentPreview) {
+          this.dampChangedStrings(next.voicing, now + 0.002, 0.04);
+        } else {
+          this.preview(next);
+        }
       } else {
         this.dampAll(now, 0.07);
       }
@@ -854,18 +990,19 @@ export class Engine {
       this.dampAll(now, 0.06);
       return;
     }
+    // 共同音保留，变化弦柔和过渡
+    this.dampChangedStrings(next.voicing, now + 0.002, 0.03);
     let firstStroke = null;
     for (const s of future) {
       s.voices = this.renderGuitar(next, s.i, s.t);
       s.chordName = next.name;
       if (s.voices.length && firstStroke === null) firstStroke = s.t;
     }
-    // 下一下扫弦还远：立刻补一下，手一动就有声
-    if (firstStroke === null || firstStroke - now > 0.09) {
-      this.dampAll(now + 0.002, 0.02);
+    // 智能节拍衔接：如果距离下一个排程发声步超过 110ms，立刻轻轻补一下新和弦根音/扫弦，保证跟手且不抢拍
+    if (firstStroke === null || firstStroke - now > 0.11) {
       if (next.custom) this.renderGuitar(next, 0, now + 0.004);
-      else if (this.playStyle === "strum") this.strum(next.voicing, now + 0.004, "D", 0.92, { short: Boolean(this.strumPattern.short) });
-      else this.pluckString(next.voicing, now + 0.004, "R", 0.7);
+      else if (this.playStyle === "strum") this.strum(next.voicing, now + 0.004, "D", 0.78, { short: Boolean(this.strumPattern.short) });
+      else this.pluckString(next.voicing, now + 0.004, "R", 0.68);
     }
   }
 
@@ -882,16 +1019,15 @@ export class Engine {
   preview(chord) {
     if (!this.ctx || !chord) return;
     const now = this.ctx.currentTime;
-    this.dampAll(now + 0.002, 0.02);
+    this.dampChangedStrings(chord.voicing, now + 0.002, 0.025);
     if (chord.custom) {
       for (const v of this.customVoices || []) this.damp(v, now, 0.02);
       this.customVoices = this.renderGuitar(chord, 0, now + 0.004);
     } else if (this.playStyle === "strum") {
-      this.strum(chord.voicing, now + 0.004, "D", 0.95);
+      this.strum(chord.voicing, now + 0.004, "D", 0.92);
     } else {
-      // 分解模式：快速琶音一下，听得出是什么和弦
       const steps = ["R", 3, 2, 1];
-      steps.forEach((spec, n) => this.pluckString(chord.voicing, now + 0.004 + n * 0.07, spec, 0.7));
+      steps.forEach((spec, n) => this.pluckString(chord.voicing, now + 0.004 + n * 0.065, spec, 0.72));
     }
   }
 }
@@ -916,13 +1052,12 @@ function makeDriveCurve(drive) {
   const norm = Math.tanh(drive);
   for (let i = 0; i < n; i += 1) {
     const x = (i * 2) / n - 1;
-    // 轻微不对称，像电子管那样多一点偶次谐波
     curve[i] = Math.tanh(drive * (x + 0.08 * x * x)) / norm;
   }
   return curve;
 }
 
-/** 琴箱共鸣冲激响应：几个衰减正弦（箱体共振峰）+ 一点点初始噪声 */
+/** 琴箱共鸣冲激响应 */
 function makeBodyIR(ctx) {
   const sr = ctx.sampleRate;
   const len = Math.floor(sr * 0.14);
@@ -938,7 +1073,7 @@ function makeBodyIR(ctx) {
   return buf;
 }
 
-/** 小房间混响冲激响应：早期反射 + 指数衰减的噪声尾巴，越往后越暗 */
+/** 小房间混响冲激响应 */
 function makeRoomIR(ctx) {
   const sr = ctx.sampleRate;
   const len = Math.floor(sr * 1.6);
@@ -948,7 +1083,7 @@ function makeRoomIR(ctx) {
     let lp = 0;
     for (let i = 0; i < len; i += 1) {
       const t = i / sr;
-      const k = 0.15 + 0.8 * Math.min(1, t / 1.2); // 时间越长滤得越狠
+      const k = 0.15 + 0.8 * Math.min(1, t / 1.2);
       lp += (1 - k) * ((Math.random() * 2 - 1) - lp);
       d[i] = lp * Math.exp(-t / 0.32) * (t < 0.012 ? t / 0.012 : 1);
     }
@@ -964,7 +1099,6 @@ function nearestZone(zones, midi) {
   let best = zones[0];
   let diff = Infinity;
   for (const z of zones) {
-    // 同样距离时优先用低一点的采样向上移调（向下移调更容易发闷）
     const d = Math.abs(midi - z) + (z > midi ? 0.4 : 0);
     if (d < diff) { diff = d; best = z; }
   }

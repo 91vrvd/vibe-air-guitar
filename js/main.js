@@ -1,38 +1,35 @@
 import {
-  allChordOptions, bindingsFromProgression, defaultBindings, normalizeChord, transposeChord, voiceChord,
-} from "./theory.js?v=3.3";
-import { BUILTIN_SONGS, STYLES, parseSheet, parseRhythm, guessKey, topChords, detectStyle, sheetFromOcrLines } from "./songs.js?v=3.3";
-import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=3.3";
-import { Engine, INSTRUMENTS } from "./audio.js?v=3.3";
-import { classifyHand, GestureStabilizer } from "./gesture.js?v=3.3";
+  allChordOptions, defaultBindings, normalizeChord, transposeChord, voiceChord,
+} from "./theory.js?v=4.3";
+import { STRUM_PATTERNS, ARP_PATTERNS, DRUM_PATTERNS, DEFAULT_CUSTOM_STEPS, findById } from "./patterns.js?v=4.3";
+import { Engine, INSTRUMENTS } from "./audio.js?v=4.3";
+import { classifyHand, GestureStabilizer } from "./gesture.js?v=4.3";
+import { detectLowEndDevice } from "./hands.js?v=4.3";
 
 const $ = (sel) => document.querySelector(sel);
-const STORE_KEY = "airGuitar.v2";
+const STORE_KEY = "airGuitar.v3";
 const FINGERS = [1, 2, 3, 4, 5];
-const FINGER_NAMES = { 1: "食指", 2: "食指+中指", 3: "三指", 4: "四指（收拇指）", 5: "五指张开" };
+const FINGER_NAMES = { 1: "伸 1 根食指", 2: "伸 2 根手指", 3: "伸 3 根手指", 4: "伸 4 根手指", 5: "5 指张开" };
+const FINGER_FEEL_LABELS = { 1: "主音 · 稳重", 2: "明亮 · 推进", 3: "柔和 · 抒情", 4: "温暖 · 铺垫", 5: "悠扬 · 过渡" };
 
-// ---------------- 设置 ----------------
+// ---------------- 设置（默认原调 + 分解 + 经典分解） ----------------
 const DEFAULTS = {
-  transpose: 0, // 升降调（半音）
-  bpm: 88,
+  transpose: 0, // 默认原调
+  bpm: 84,
   instrument: "acoustic",
-  style: "strum",
+  style: "arp", // 默认分解
+  arpId: "classic", // 默认经典分解 R3231323
   strumId: "folk",
-  arpId: "classic",
   customSteps: DEFAULT_CUSTOM_STEPS.slice(),
-  drumId: "standard",
+  drumId: "ballad",
   drumsOn: true,
   airDrum: true,
-  airDrumSize: 120,
-  countIn: false,
+  airDrumSize: 88,
   hold: false,
-  mode: "free", // free 自由弹 / song 跟谱弹唱 / auto 自动走谱
-  barsPerChord: 1,
-  songId: "p_pop",
-  customSongs: [], // 用户导入的文字谱 {id, title, text}
-  bindings: defaultBindings("C"),
+  bindings: defaultBindings("C"), // 1–5 指对应 C G Am F Em
+  liteMode: detectLowEndDevice(), // 手机或低配设备自动开启省流防卡顿
   guitarVol: 85,
-  drumVol: 60,
+  drumVol: 55,
   humanize: true,
   spread: true,
   stability: 2,
@@ -42,27 +39,31 @@ const DEFAULTS = {
   theme: null,
   introSeen: false,
   tutorialDone: false,
-  useSheetRhythm: false,
 };
 
 function loadSettings() {
   try {
+    // 清理旧版本可能遗留的高调/扫弦缓存，统一使用新版纯净配置
+    try { localStorage.removeItem("airGuitar.v2"); } catch {}
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-    const merged = { ...DEFAULTS, ...saved, bindings: { ...DEFAULTS.bindings, ...(saved.bindings || {}) } };
-    for (const f of FINGERS) merged.bindings[f] = normalizeChord(merged.bindings[f]) || DEFAULTS.bindings[f];
+    const merged = {
+      ...DEFAULTS,
+      ...saved,
+      bindings: { ...DEFAULTS.bindings, ...(saved.bindings || {}) },
+    };
+    if (saved.liteMode === undefined) merged.liteMode = detectLowEndDevice();
+    for (const f of FINGERS) {
+      merged.bindings[f] = normalizeChord(merged.bindings[f]) || DEFAULTS.bindings[f];
+    }
     if (!INSTRUMENTS.some((i) => i.id === merged.instrument)) merged.instrument = DEFAULTS.instrument;
+    if (!["arp", "strum", "custom"].includes(merged.style)) merged.style = DEFAULTS.style;
     if (!Array.isArray(merged.customSteps)) merged.customSteps = DEFAULTS.customSteps.slice();
-    merged.bpm = clamp(Number(merged.bpm) || 88, 50, 180);
-    // 旧版本设置迁移
-    if (saved.follow && !saved.mode) merged.mode = "auto";
-    if (!["free", "song", "auto"].includes(merged.mode)) merged.mode = "free";
+    merged.bpm = clamp(Number(merged.bpm) || 84, 50, 180);
     if (!STRUM_PATTERNS.some((p) => p.id === merged.strumId)) merged.strumId = DEFAULTS.strumId;
     if (!ARP_PATTERNS.some((p) => p.id === merged.arpId)) merged.arpId = DEFAULTS.arpId;
     if (!DRUM_PATTERNS.some((p) => p.id === merged.drumId)) merged.drumId = DEFAULTS.drumId;
-    if (!Array.isArray(merged.customSongs)) merged.customSongs = [];
     merged.transpose = clamp(Math.round(Number(merged.transpose) || 0), -6, 6);
-    merged.airDrumSize = clamp(Number(merged.airDrumSize) || 120, 60, 220);
-    delete merged.key; delete merged.capo; delete merged.progression; delete merged.follow; delete merged.palmMute;
+    merged.airDrumSize = clamp(Number(merged.airDrumSize) || 88, 60, 220);
     return merged;
   } catch {
     return structuredClone(DEFAULTS);
@@ -79,25 +80,20 @@ function save() {
 
 const settings = loadSettings();
 const engine = new Engine();
-const customAudio = new Map(); // finger -> {buffer, name}
+const customAudio = new Map();
 
 // ---------------- 演奏状态 ----------------
 const state = {
-  camFinger: null, // 摄像头稳定结果：null 无手 / 0 握拳 / 1-5
-  manualFinger: null, // 按键/键盘按住
-  latchedFinger: null, // 无摄像头时点一下锁定
-  heldFinger: null, // 保持模式下松手后保留
+  camFinger: null,
+  manualFinger: null,
+  latchedFinger: null,
+  heldFinger: null,
   activeFinger: null,
-  heardChord: null, // 自动走谱时当前听到的和弦
-  heardStep: -1,
   cameraOn: false,
   lastLandmarks: null,
-  airDrumSince: 0,
-  airDrumCooldown: 0,
   airDrumInside: false,
-  songPos: 0, // 跟谱弹唱：当前第几个和弦
-  autoPos: -1, // 自动走谱：正在响的第几个和弦
-  ctaFull: !settings.introSeen, // 摄像头入口：大卡片 / 画面中间的按钮
+  airDrumCooldown: 0,
+  ctaFull: !settings.introSeen,
 };
 
 let tracker = null;
@@ -108,27 +104,24 @@ const el = {
   app: $("#app"), stage: $("#stage"), video: $("#video"), overlay: $("#overlay"),
   status: $("#status"), statusText: $("#statusText"),
   camBtn: $("#camBtn"), themeBtn: $("#themeBtn"), helpBtn: $("#helpBtn"), settingsBtn: $("#settingsBtn"),
-  hudChord: $("#hudChord"), hudMeta: $("#hudMeta"), hudNext: $("#hudNext"), hudLabel: $("#hudLabel"),
+  hudChord: $("#hudChord"), hudMeta: $("#hudMeta"), hudLabel: $("#hudLabel"),
   beats: $("#beats"), airDrum: $("#airDrum"), perf: $("#perf"), toast: $("#toast"),
   intro: $("#intro"), guide: $("#guide"), introCam: $("#introCam"), introSkip: $("#introSkip"), camPill: $("#camPill"),
   coach: $("#coach"), coachStep: $("#coachStep"), coachText: $("#coachText"), coachBar: $("#coachBar"), coachSkip: $("#coachSkip"),
+  liteMode: $("#liteMode"),
   pads: $("#pads"), playBtn: $("#playBtn"), playLabel: $("#playLabel"),
   bpmDown: $("#bpmDown"), bpmUp: $("#bpmUp"), bpmInput: $("#bpmInput"),
-  modeSeg: $("#modeSeg"), rhythmChip: $("#rhythmChip"), rhythmChipText: $("#rhythmChipText"),
+  rhythmChip: $("#rhythmChip"), rhythmChipText: $("#rhythmChipText"),
   sheet: $("#sheet"), sheetClose: $("#sheetClose"), scrim: $("#scrim"),
   instrument: $("#instrument"), styleSeg: $("#styleSeg"), strumPattern: $("#strumPattern"), arpPattern: $("#arpPattern"),
   strumField: $("#strumField"), arpField: $("#arpField"), customField: $("#customField"),
   customSteps: $("#customSteps"), customKeys: $("#customKeys"), customUndo: $("#customUndo"), customReset: $("#customReset"),
   guitarVol: $("#guitarVol"), drumVol: $("#drumVol"),
-  humanize: $("#humanize"), spread: $("#spread"),
-  drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), airDrumSize: $("#airDrumSize"), countIn: $("#countIn"), drumPattern: $("#drumPattern"),
-  songSelect: $("#songSelect"), songTitle: $("#songTitle"), songText: $("#songText"), songImport: $("#songImport"), songDelete: $("#songDelete"),
-  importBox: $("#importBox"), transpose: $("#transpose"),
-  ocrBtn: $("#ocrBtn"), ocrStatus: $("#ocrStatus"), songStyle: $("#songStyle"), songStyleInfo: $("#songStyleInfo"), hudSong: $("#hudSong"),
-  lyrics: $("#lyrics"), lyricNow: $("#lyricNow"), lyricNext: $("#lyricNext"),
-  barsSeg: $("#barsSeg"), bindings: $("#bindings"),
+  drumsOn: $("#drumsOn"), airDrumOn: $("#airDrumOn"), drumPattern: $("#drumPattern"),
+  transpose: $("#transpose"), bindings: $("#bindings"),
   holdSeg: $("#holdSeg"), stabilitySeg: $("#stabilitySeg"),
-  mirror: $("#mirror"), skeleton: $("#skeleton"), perfOn: $("#perfOn"), resetAll: $("#resetAll"),
+  mirror: $("#mirror"), skeleton: $("#skeleton"), perfOn: $("#perfOn"),
+  resetAll: $("#resetAll"),
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -137,80 +130,11 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
 function fingersGlyph(n) {
   return `<span class="fingers" aria-hidden="true">${[1, 2, 3, 4, 5].map((i) => {
-    // 1-4 指从食指开始数，5 指含拇指
     const up = n === 5 ? true : i >= 2 && i <= n + 1;
     return `<i class="${up ? "up" : ""}"></i>`;
   }).join("")}</span>`;
 }
 function soundingName(shape) { return transposeChord(shape, settings.transpose); }
-
-// ---------------- 歌曲 ----------------
-let song = null; // {id, title, key, lines, sequence}
-function allSongs() { return [...settings.customSongs, ...BUILTIN_SONGS]; }
-
-function loadSong(id, { rebind = true } = {}) {
-  const src = allSongs().find((x) => x.id === id) || BUILTIN_SONGS.find((x) => x.id === DEFAULTS.songId);
-  const parsed = parseSheet(src.text);
-  const meta = parsed.meta || {};
-  const styleFromMeta = Object.keys(STYLES).find((k) => k === meta.style || STYLES[k].name === meta.style);
-  song = {
-    ...src,
-    ...parsed,
-    key: src.key || meta.key || guessKey(parsed.sequence),
-    style: src.style || styleFromMeta || (meta.meter === 3 ? "waltz" : undefined),
-    bpm: src.bpm || meta.bpm || null,
-    rhythm: parseRhythm(meta.rhythm), // 谱上写的节奏，优先用
-  };
-  if (!song.sequence.length) song.sequence = [{ name: "C", line: 0 }];
-  settings.songId = song.id;
-  state.songPos = 0;
-  state.autoPos = -1;
-  if (rebind) settings.bindings = bindingsFromProgression(topChords(song.sequence, 5), song.key);
-}
-
-function songChordAt(pos) {
-  const item = song.sequence[((pos % song.sequence.length) + song.sequence.length) % song.sequence.length];
-  return chordObj(item.name);
-}
-
-function songStyle() { return STYLES[song.style] || STYLES.folk; }
-
-function styleSummary(st, bpm) {
-  const r = song?.rhythm;
-  const how = r ? `谱上的${r.type === "arp" ? "分解" : "扫弦"}「${r.type === "arp" ? r.steps.join("") : r.pattern}」`
-    : st.style === "arp" ? `分解「${findById(ARP_PATTERNS, st.arpId).name}」` : `扫弦「${findById(STRUM_PATTERNS, st.strumId).name}」`;
-  const threeFour = r ? r.meter === 3 : (st.style === "arp" ? findById(ARP_PATTERNS, st.arpId).meter : findById(STRUM_PATTERNS, st.strumId).meter) === 3;
-  const drum = !st.drumsOn ? "不开鼓" : threeFour ? "鼓「华尔兹（嘭-嚓-嚓）」" : `鼓「${findById(DRUM_PATTERNS, st.drumId).name}」`;
-  return `${st.name} · ${bpm} BPM · ${how} · ${drum}`;
-}
-
-/** 按歌的曲风自动配好速度、弹法、节奏型和鼓 */
-function applySongStyle() {
-  const st = songStyle();
-  settings.style = st.style;
-  if (st.strumId) settings.strumId = st.strumId;
-  if (st.arpId) settings.arpId = st.arpId;
-  settings.drumsOn = st.drumsOn;
-  settings.drumId = st.drumId;
-  // 谱上写了节奏 / 变调夹，就照谱来
-  settings.useSheetRhythm = Boolean(song.rhythm);
-  if (song.rhythm) settings.style = song.rhythm.type;
-  if (song.meta?.capo !== undefined) settings.transpose = clamp(song.meta.capo, -6, 6);
-  setBpm(song.bpm || st.bpm);
-}
-
-function renderSongInfo() {
-  const st = songStyle();
-  const summary = styleSummary(st, song.bpm || st.bpm);
-  el.songStyleInfo.textContent = `这首歌的推荐配置：${summary}${song.reason ? `（${song.reason}）` : ""}`;
-  el.hudSong.hidden = settings.mode === "free";
-  el.hudSong.textContent = `${song.sequence.length} 个和弦 · ${summary}`;
-}
-
-function setSongPos(pos) {
-  const n = song.sequence.length;
-  state.songPos = ((pos % n) + n) % n;
-}
 
 function chordObj(shape, finger = null) {
   const name = soundingName(shape);
@@ -218,7 +142,7 @@ function chordObj(shape, finger = null) {
 }
 
 let toastTimer = null;
-function toast(text, ms = 3200) {
+function toast(text, ms = 2800) {
   el.toast.textContent = text;
   el.toast.hidden = false;
   clearTimeout(toastTimer);
@@ -231,20 +155,15 @@ function setStatus(text, kind = "idle") {
 }
 
 function setSeg(seg, value) {
+  if (!seg) return;
   seg.querySelectorAll("[data-value]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.value === String(value))));
 }
 
 function chordFor(finger) {
   if (!finger) return null;
-  if (settings.mode === "song") return songChordAt(state.songPos);
   const shape = settings.bindings[finger];
   if (!shape) return null;
   return chordObj(shape, finger);
-}
-
-function fingerOfShape(shape) {
-  const f = FINGERS.find((n) => settings.bindings[n] === shape);
-  return f || null;
 }
 
 // ---------------- 引擎同步 ----------------
@@ -257,24 +176,19 @@ function applyEngineSettings() {
   engine.drumId = settings.drumId;
   engine.drumsOn = settings.drumsOn;
   engine.bpm = settings.bpm;
-  engine.capo = 0; // 升降调直接换和弦排布，不靠变调夹
-  engine.humanize = settings.humanize;
-  engine.spread = settings.spread;
-  engine.countIn = settings.countIn;
-  engine.followMode = settings.mode === "auto";
-  engine.songStrum = settings.useSheetRhythm && song?.rhythm?.type === "strum" ? song.rhythm : null;
-  engine.songArp = settings.useSheetRhythm && song?.rhythm?.type === "arp" ? song.rhythm : null;
-  engine.barsPerChord = settings.barsPerChord;
-  engine.progression = progressionChords();
+  engine.capo = 0;
+  engine.humanize = true;
+  engine.spread = true;
+  engine.countIn = false;
+  engine.followMode = false;
+  engine.songStrum = null;
+  engine.songArp = null;
   engine.setVolumes(settings.guitarVol / 100, settings.drumVol / 100);
-}
-
-function progressionChords() {
-  return song.sequence.map((c) => ({ ...chordObj(c.name), beats: c.beats }));
+  if (tracker) tracker.setLite(settings.liteMode);
 }
 
 function neededMidis() {
-  const shapes = new Set([...Object.values(settings.bindings), ...song.sequence.map((c) => c.name)]);
+  const shapes = new Set(Object.values(settings.bindings));
   const midis = [];
   shapes.forEach((sh) => voiceChord(soundingName(sh)).strings.forEach((m) => { if (m !== null) midis.push(m); }));
   return midis;
@@ -282,15 +196,15 @@ function neededMidis() {
 
 let instrumentLoad = null;
 function loadInstrument() {
-  instrumentLoad = engine.loadInstrument(settings.instrument, neededMidis());
+  instrumentLoad = engine.loadInstrument(settings.instrument, neededMidis(), { lite: settings.liteMode });
   return instrumentLoad;
 }
 
 engine.onLoadState = (stateName, detail) => {
   if (stateName === "loading") {
-    if (!state.cameraOn) setStatus(`加载${detail.name} ${detail.done}/${detail.total}`, "busy");
+    if (!state.cameraOn) setStatus(`正在加载${detail.name} (${detail.done}/${detail.total})`, "busy");
   } else if (stateName === "failed") {
-    toast("音色采样没下载成功，先用合成音兜底；网络恢复后切换一次音色即可重试。");
+    toast("网络较慢，已自动启用内置合成吉他音色，可直接使用！");
     refreshStatus();
   } else {
     refreshStatus();
@@ -298,8 +212,11 @@ engine.onLoadState = (stateName, detail) => {
 };
 
 function refreshStatus() {
-  if (state.cameraOn) setStatus("识别中 · 伸出 1–5 根手指", "live");
-  else setStatus(engine.running ? "伴奏中 · 用按键或数字键换和弦" : "摄像头未开启", engine.running ? "live" : "idle");
+  if (state.cameraOn) {
+    setStatus("摄像头已开启 · 对着镜头伸 1–5 根手指即可弹奏", "live");
+  } else {
+    setStatus(engine.running ? "伴奏播放中 · 点下方 1–5 号键或开摄像头换和弦" : "先点画面中间「开启摄像头」或下方 1–5 号按键", engine.running ? "live" : "idle");
+  }
 }
 
 // ---------------- 和弦选择逻辑 ----------------
@@ -324,7 +241,6 @@ function updateChord(force = false) {
 async function pressFinger(finger, { latch = false } = {}) {
   await ensureAudioReady();
   if (latch) {
-    // 伴奏中再点一次同一个和弦 = 停；没伴奏时再点 = 再扫一下
     if (engine.running && state.latchedFinger === finger && state.activeFinger === finger) {
       state.latchedFinger = null;
       state.heldFinger = null;
@@ -353,6 +269,7 @@ function muteAll() {
   state.latchedFinger = null;
   state.heldFinger = null;
   state.manualFinger = null;
+  if (engine.ctx) engine.dampAll(engine.ctx.currentTime, 0.04);
   updateChord(true);
 }
 
@@ -368,118 +285,39 @@ async function ensureAudioReady() {
 }
 
 // ---------------- 渲染 ----------------
-function songWindowStart() {
-  const pos = settings.mode === "auto" ? Math.max(0, state.autoPos) : state.songPos;
-  return Math.max(0, Math.min(pos - 1, song.sequence.length - 5));
-}
-
 function renderPads() {
-  if (settings.mode !== "free") {
-    // 跟谱 / 自动：按键显示歌里接下来的和弦，点哪个就跳到哪个
-    const start = songWindowStart();
-    const cur = settings.mode === "auto" ? state.autoPos : state.songPos;
-    el.pads.innerHTML = Array.from({ length: Math.min(5, song.sequence.length) }, (_, k) => {
-      const pos = start + k;
-      const name = soundingName(song.sequence[pos].name);
-      const label = pos === cur ? "现在" : pos < cur ? "上一个" : pos === cur + 1 ? "下一个" : "之后";
-      return `<button type="button" class="pad${pos === cur ? " active" : ""}" data-pos="${pos}" aria-label="${label}：${escapeHtml(name)}">
-        <span class="pad-top"><span>${label}</span><span>${pos + 1}/${song.sequence.length}</span></span>
-        <span class="pad-chord">${escapeHtml(name)}</span>
-      </button>`;
-    }).join("");
-    renderLyrics();
-    return;
-  }
   el.pads.innerHTML = FINGERS.map((f) => {
     const name = soundingName(settings.bindings[f]);
-    return `<button type="button" class="pad" data-finger="${f}" aria-label="${f} 指：${escapeHtml(name)}">
-      <span class="pad-top">${fingersGlyph(f)}<span>${f}</span></span>
+    const feel = `${f} 根手指 · ${FINGER_FEEL_LABELS[f]}`;
+    return `<button type="button" class="pad" data-finger="${f}" aria-label="伸 ${f} 根手指：${escapeHtml(name)}">
+      <span class="pad-top">${fingersGlyph(f)}<span>${f} 指</span></span>
       <span class="pad-chord">${escapeHtml(name)}</span>
+      <span class="pad-feel">${escapeHtml(feel)}</span>
     </button>`;
   }).join("");
-  renderLyrics();
 }
 
-function lyricLineHtml(li, cur) {
-  const line = song.lines[li];
-  if (!line) return "";
-  const segs = [];
-  const chords = line.chords;
-  if (!chords.length) return `<span class="lyric-seg"><span class="ch"></span><span class="tx">${escapeHtml(line.text)}</span></span>`;
-  if (chords[0].at > 0) segs.push(`<span class="lyric-seg"><span class="ch"></span><span class="tx">${escapeHtml(line.text.slice(0, chords[0].at))}</span></span>`);
-  chords.forEach((c, k) => {
-    const text = line.text.slice(c.at, k + 1 < chords.length ? chords[k + 1].at : undefined);
-    const cls = c.seq === cur ? " cur" : c.seq < cur ? " past" : "";
-    segs.push(`<span class="lyric-seg${cls}"><span class="ch">${escapeHtml(soundingName(c.name))}</span><span class="tx">${escapeHtml(text) || "&nbsp;"}</span></span>`);
-  });
-  return segs.join("");
-}
-
-function renderLyrics() {
-  const show = settings.mode !== "free";
-  el.lyrics.hidden = !show;
-  if (!show) return;
-  const cur = settings.mode === "auto" ? Math.max(0, state.autoPos) : state.songPos;
-  const li = song.sequence[cur]?.line ?? 0;
-  el.lyricNow.innerHTML = lyricLineHtml(li, cur);
-  const nextLi = li + 1 < song.lines.length ? li + 1 : 0;
-  el.lyricNext.innerHTML = song.lines.length > 1 ? lyricLineHtml(nextLi, cur) : "";
-}
-
-let lastHudName = null;
 function renderLive() {
   const finger = state.activeFinger;
-  const follow = settings.mode === "auto" && engine.running;
   let name = null;
   let meta = "";
-  if (settings.mode === "song") {
-    const next = songChordAt(state.songPos + 1).name;
-    if (finger) {
-      name = songChordAt(state.songPos).name;
-      meta = state.cameraOn ? `换一个手势 → 下一个和弦 ${next}` : `点「下一个」或按 → 键 → ${next}`;
-    } else {
-      meta = state.cameraOn ? "伸出手指开始弹；每换一次手势，就走到下一个和弦" : "点下方的和弦开始弹";
-    }
-  } else if (follow && state.heardChord) {
-    name = state.heardChord.name;
-    const f = fingerOfShape(state.heardChord.shape);
-    meta = f ? `比 ${f} 根手指跟着弹` : "这个和弦没绑手指，听着唱就好";
-  } else if (finger) {
+  if (finger) {
     const chord = chordFor(finger);
     name = chord?.name || null;
-    meta = `${finger} 根手指 · ${FINGER_NAMES[finger]}`;
+    meta = `${FINGER_NAMES[finger]} · ${FINGER_FEEL_LABELS[finger] || "正在发声"}`;
   } else {
     meta = state.cameraOn
-      ? (state.camFinger === 0 ? "握拳：静音" : state.lastLandmarks ? "看到手了，伸出 1–5 根手指" : "把手放进画面")
-      : "点下方和弦，或按数字键 1–5";
+      ? (state.camFinger === 0 ? "已握拳：静音中" : state.lastLandmarks ? "识别到手了 · 伸出 1–5 根手指" : "把手放到镜头前，伸 1–5 根手指")
+      : "点下方 1–5 号大按键，或开启摄像头";
   }
-  el.hudLabel.textContent = settings.mode === "song" ? `跟谱弹唱 · ${song.title}`
-    : settings.mode === "auto" ? `自动走谱 · ${song.title}` : settings.hold ? "当前和弦 · 保持" : "当前和弦";
+  el.hudLabel.textContent = settings.hold ? "当前和弦 · 保持" : "当前和弦";
   el.hudChord.textContent = name || "—";
   el.hudChord.classList.toggle("idle", !name);
-  if (name && name !== lastHudName) {
-    el.hudChord.classList.remove("pop");
-    void el.hudChord.offsetWidth;
-    el.hudChord.classList.add("pop");
-  }
-  lastHudName = name;
   el.hudMeta.textContent = meta;
 
-  // 自动走谱：只管唱，提示下一个和弦
-  if (settings.mode === "auto") {
-    const idx = engine.running ? Math.max(0, state.autoPos) : 0;
-    const next = songChordAt(idx + (engine.running ? 1 : 0));
-    el.hudNext.hidden = false;
-    el.hudNext.innerHTML = `${engine.running ? "下一个" : "点「开始伴奏」从这里开始"} <b>${escapeHtml(next.name)}</b>`;
-  } else {
-    el.hudNext.hidden = true;
-  }
-
-  if (settings.mode === "free") {
-    el.pads.querySelectorAll(".pad").forEach((pad) => {
-      pad.classList.toggle("active", Number(pad.dataset.finger) === finger);
-    });
-  }
+  el.pads.querySelectorAll(".pad").forEach((pad) => {
+    pad.classList.toggle("active", Number(pad.dataset.finger) === finger);
+  });
   checkTutorial();
 }
 
@@ -498,15 +336,16 @@ function renderBeats(stepInfo) {
 
 function renderPlay() {
   el.playBtn.setAttribute("aria-pressed", String(engine.running));
-  el.playLabel.textContent = engine.running ? "停止" : "开始伴奏";
+  el.playLabel.textContent = engine.running ? "停止伴奏" : "开始伴奏";
   checkTutorial();
 }
 
 function renderRhythmChip() {
-  const name = settings.style === "strum"
-    ? findById(STRUM_PATTERNS, settings.strumId).name
-    : settings.style === "arp" ? findById(ARP_PATTERNS, settings.arpId).name.split(" ")[0] : "自定义分解";
-  el.rhythmChipText.textContent = `${name} · ${findById(DRUM_PATTERNS, settings.drumId).name}`;
+  const instName = INSTRUMENTS.find((i) => i.id === settings.instrument)?.name.split("（")[0] || "木吉他";
+  const rName = settings.style === "strum"
+    ? findById(STRUM_PATTERNS, settings.strumId).name.split("（")[0]
+    : settings.style === "arp" ? findById(ARP_PATTERNS, settings.arpId).name.split(" ")[0] : "自定义";
+  el.rhythmChipText.textContent = `${instName} · ${rName}`;
 }
 
 function renderAirDrum() {
@@ -517,7 +356,7 @@ function renderAirDrum() {
 }
 
 function renderGuide() {
-  el.guide.innerHTML = FINGERS.map((f) => `<li>${fingersGlyph(f)}<b>${escapeHtml(soundingName(settings.bindings[f]))}</b><span>${f} 指</span></li>`).join("");
+  el.guide.innerHTML = FINGERS.map((f) => `<li>${fingersGlyph(f)}<b>${escapeHtml(soundingName(settings.bindings[f]))}</b><span>伸 ${f} 指</span></li>`).join("");
 }
 
 function renderBindings() {
@@ -550,6 +389,7 @@ function renderCustom() {
 function renderSettings() {
   el.instrument.value = settings.instrument;
   setSeg(el.styleSeg, settings.style);
+  if (el.liteMode) el.liteMode.checked = settings.liteMode;
   el.strumField.hidden = settings.style !== "strum";
   el.arpField.hidden = settings.style !== "arp";
   el.customField.hidden = settings.style !== "custom";
@@ -557,21 +397,12 @@ function renderSettings() {
   el.arpPattern.value = settings.arpId;
   el.guitarVol.value = settings.guitarVol;
   el.drumVol.value = settings.drumVol;
-  el.humanize.checked = settings.humanize;
-  el.spread.checked = settings.spread;
   el.drumsOn.checked = settings.drumsOn;
   el.airDrumOn.checked = settings.airDrum;
-  el.countIn.checked = settings.countIn;
   el.drumPattern.value = settings.drumId;
-  fillSongs();
   el.transpose.value = String(settings.transpose);
-  el.songDelete.hidden = !settings.customSongs.some((x) => x.id === settings.songId);
-  renderSongInfo();
-  el.airDrumSize.value = settings.airDrumSize;
-  setSeg(el.barsSeg, settings.barsPerChord);
   setSeg(el.holdSeg, settings.hold ? "hold" : "stop");
   setSeg(el.stabilitySeg, settings.stability);
-  setSeg(el.modeSeg, settings.mode);
   el.mirror.checked = settings.mirror;
   el.skeleton.checked = settings.skeleton;
   el.perfOn.checked = settings.perf;
@@ -590,29 +421,11 @@ function fillSelects() {
   el.strumPattern.innerHTML = STRUM_PATTERNS.map((p) => `<option value="${p.id}">${p.name}  ·  ${p.pattern.split("").join(" ")}</option>`).join("");
   el.arpPattern.innerHTML = ARP_PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
   el.drumPattern.innerHTML = DRUM_PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-  el.songStyle.innerHTML = `<option value="auto">自动识别（推荐）</option>` + Object.entries(STYLES).map(([id, st]) => `<option value="${id}">${st.name}</option>`).join("");
   el.transpose.innerHTML = Array.from({ length: 13 }, (_, k) => {
     const v = k - 6;
-    const label = v === 0 ? "原调" : v > 0 ? `升 ${v} 个半音（更高）` : `降 ${-v} 个半音（更低）`;
+    const label = v === 0 ? "原调（默认）" : v > 0 ? `升 ${v} 个半音（更高）` : `降 ${-v} 个半音（更低）`;
     return `<option value="${v}">${label}</option>`;
   }).join("");
-}
-
-function fillSongs() {
-  const mine = settings.customSongs.map((x) => `<option value="${escapeHtml(x.id)}">我导入的：${escapeHtml(x.title)}</option>`).join("");
-  const songs = BUILTIN_SONGS.filter((x) => !x.id.startsWith("p_")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
-  const practice = BUILTIN_SONGS.filter((x) => x.id.startsWith("p_")).map((x) => `<option value="${x.id}">${escapeHtml(x.title)}</option>`).join("");
-  el.songSelect.innerHTML = (mine ? `<optgroup label="我导入的歌">${mine}</optgroup>` : "")
-    + `<optgroup label="内置歌曲（公有领域）">${songs}</optgroup><optgroup label="和弦练习">${practice}</optgroup>`;
-  el.songSelect.value = settings.songId;
-}
-
-function useSong(id) {
-  loadSong(id);
-  applySongStyle();
-  changed({ rerenderPads: true, reload: true });
-  renderSettings();
-  toast(`「${song.title}」已自动配好：${styleSummary(songStyle(), settings.bpm)}`, 4500);
 }
 
 // ---------------- 设置变更 ----------------
@@ -627,6 +440,7 @@ function changed({ rerenderPads = false, reload = false } = {}) {
 }
 
 function onSeg(seg, handler) {
+  if (!seg) return;
   seg.addEventListener("click", (e) => {
     const b = e.target.closest("[data-value]");
     if (!b) return;
@@ -646,19 +460,23 @@ function bindSettings() {
     });
   });
   onSeg(el.styleSeg, (v) => {
-    settings.useSheetRhythm = false;
     settings.style = v;
     renderSettings();
     changed();
   });
+  el.liteMode?.addEventListener("change", () => {
+    settings.liteMode = el.liteMode.checked;
+    applyEngineSettings();
+    save();
+    toast(settings.liteMode ? "已开启手机流畅/省流模式" : "已切换为标准高清模式", 2400);
+  });
   el.strumPattern.addEventListener("change", () => {
-    settings.useSheetRhythm = false;
     settings.strumId = el.strumPattern.value;
     const p = findById(STRUM_PATTERNS, settings.strumId);
     setBpm(p.bpm);
     changed();
   });
-  el.arpPattern.addEventListener("change", () => { settings.useSheetRhythm = false; settings.arpId = el.arpPattern.value; changed(); });
+  el.arpPattern.addEventListener("change", () => { settings.arpId = el.arpPattern.value; changed(); });
   el.customKeys.addEventListener("click", (e) => {
     const b = e.target.closest("[data-step]");
     if (!b || settings.customSteps.length >= 16) return;
@@ -666,7 +484,6 @@ function bindSettings() {
     settings.customSteps.push(v);
     renderCustom();
     changed();
-    // 录入时顺便听一下这个音
     ensureAudioReady().then(() => {
       const c = chordFor(state.activeFinger || 1);
       if (c && !engine.running) engine.pluckString(c.voicing, engine.ctx.currentTime + 0.01, v, 0.7);
@@ -676,64 +493,21 @@ function bindSettings() {
   el.customReset.addEventListener("click", () => { settings.customSteps = DEFAULT_CUSTOM_STEPS.slice(); renderCustom(); changed(); });
   el.guitarVol.addEventListener("input", () => { settings.guitarVol = Number(el.guitarVol.value); applyEngineSettings(); save(); });
   el.drumVol.addEventListener("input", () => { settings.drumVol = Number(el.drumVol.value); applyEngineSettings(); save(); });
-  el.humanize.addEventListener("change", () => { settings.humanize = el.humanize.checked; changed(); });
-  el.spread.addEventListener("change", () => { settings.spread = el.spread.checked; changed(); });
   el.drumsOn.addEventListener("change", () => { setDrums(el.drumsOn.checked); });
   el.airDrumOn.addEventListener("change", () => { settings.airDrum = el.airDrumOn.checked; renderAirDrum(); save(); resizeOverlay(); });
-  el.airDrumSize.addEventListener("input", () => { settings.airDrumSize = Number(el.airDrumSize.value); renderAirDrum(); save(); requestAnimationFrame(resizeOverlay); });
-  el.countIn.addEventListener("change", () => { settings.countIn = el.countIn.checked; changed(); });
   el.drumPattern.addEventListener("change", () => { settings.drumId = el.drumPattern.value; changed(); });
   el.transpose.addEventListener("change", () => {
     settings.transpose = Number(el.transpose.value);
     changed({ rerenderPads: true, reload: true });
   });
-  el.songSelect.addEventListener("change", () => useSong(el.songSelect.value));
-  // 早期版本可能存过 API Key，这里顺手清掉
-  try { localStorage.removeItem("airGuitar.aiKey"); } catch {}
-  el.ocrBtn.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.addEventListener("change", () => { if (input.files?.[0]) recognizeScreenshot(input.files[0]); });
-    input.click();
-  });
-  el.songImport.addEventListener("click", () => {
-    const text = el.songText.value.trim();
-    const parsed = parseSheet(text);
-    if (!parsed.sequence.length) {
-      toast("没认出和弦。和弦要用 C、Am、G7 这样的写法，放在方括号里或单独一行在歌词上面。", 5000);
-      return;
-    }
-    const title = el.songTitle.value.trim() || `导入的歌 ${settings.customSongs.length + 1}`;
-    const id = `u_${Date.now().toString(36)}`;
-    const guess = detectStyle(text, parsed.sequence);
-    const chosen = el.songStyle.value === "auto" ? guess.styleId : el.songStyle.value;
-    const reason = el.songStyle.value === "auto" ? `自动识别：${guess.reason}` : "你选的曲风";
-    settings.customSongs.unshift({ id, title, text, style: chosen, bpm: guess.bpm, reason });
-    el.songText.value = "";
-    el.songTitle.value = "";
-    el.importBox.open = false;
-    useSong(id);
-    if (settings.mode === "free") {
-      settings.mode = "song";
-      changed({ rerenderPads: true });
-      renderSettings();
-    }
-    toast(`识别到 ${parsed.lines.length} 行、${parsed.sequence.length} 个和弦；${styleSummary(songStyle(), settings.bpm)}。已切到「跟谱弹唱」`, 6000);
-  });
-  el.songDelete.addEventListener("click", () => {
-    const item = settings.customSongs.find((x) => x.id === settings.songId);
-    if (!item || !confirm(`删除「${item.title}」？`)) return;
-    settings.customSongs = settings.customSongs.filter((x) => x.id !== item.id);
-    useSong(DEFAULTS.songId);
-  });
-  onSeg(el.barsSeg, (v) => { settings.barsPerChord = Number(v); changed(); });
+
   el.bindings.addEventListener("change", (e) => {
     const sel = e.target.closest("[data-bind]");
     if (!sel) return;
     settings.bindings[sel.dataset.bind] = normalizeChord(sel.value) || settings.bindings[sel.dataset.bind];
     changed({ rerenderPads: true, reload: settings.instrument === "piano" || settings.instrument === "violin" });
   });
+
   el.bindings.addEventListener("click", (e) => {
     const b = e.target.closest("[data-upload]");
     if (!b) return;
@@ -756,7 +530,7 @@ function bindSettings() {
         const buffer = await new Promise((res, rej) => engine.ctx.decodeAudioData(ab, res, rej));
         customAudio.set(f, { buffer, name: file.name });
         renderBindings();
-        toast(`${f} 指已换成「${file.name}」，每小节开头播放一次`);
+        toast(`${f} 指已换成「${file.name}」`);
         updateChord(true);
       } catch {
         toast("这个音频文件解不开，换个 mp3 / wav / m4a 试试");
@@ -770,15 +544,13 @@ function bindSettings() {
   el.skeleton.addEventListener("change", () => { settings.skeleton = el.skeleton.checked; if (!settings.skeleton) clearOverlay(); save(); });
   el.perfOn.addEventListener("change", () => { settings.perf = el.perfOn.checked; el.perf.hidden = !settings.perf; save(); });
   el.resetAll.addEventListener("click", () => {
-    if (!confirm("恢复全部默认设置？自定义的和弦绑定和走向会被清掉。")) return;
+    if (!confirm("恢复全部默认设置？")) return;
     const theme = settings.theme;
-    const customSongs = settings.customSongs;
-    Object.assign(settings, structuredClone(DEFAULTS), { theme, introSeen: true, tutorialDone: true, customSongs });
+    Object.assign(settings, structuredClone(DEFAULTS), { theme, introSeen: true, tutorialDone: true });
     customAudio.clear();
-    loadSong(settings.songId);
     renderSettings();
     changed({ rerenderPads: true, reload: true });
-    toast("已恢复默认设置");
+    toast("已恢复默认设置（原调 · 经典分解）");
   });
 }
 
@@ -796,7 +568,7 @@ function setDrums(on) {
   save();
 }
 
-// ---------------- 面板 ----------------
+// ---------------- 设置抽屉 ----------------
 const desktopMq = matchMedia("(min-width: 1100px)");
 function isDesktop() { return desktopMq.matches; }
 function openSheet(open) {
@@ -814,14 +586,13 @@ function openSheet(open) {
 function sheetIsOpen() {
   return isDesktop() ? !el.app.classList.contains("sheet-collapsed") : el.app.classList.contains("sheet-open");
 }
-desktopMq.addEventListener?.("change", () => openSheet(isDesktop()));
 
 // ---------------- 主题 ----------------
 function applyTheme() {
   const theme = settings.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
   document.documentElement.dataset.theme = theme;
   accentColor = getComputedStyle(document.documentElement).getPropertyValue("--stage-highlight").trim() || accentColor;
-  document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#FFFFFF";
+  document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0f1012";
 }
 
 // ---------------- 摄像头 ----------------
@@ -835,17 +606,21 @@ async function startCamera() {
   el.camBtn.disabled = true;
   el.introCam.disabled = true;
   el.camPill.disabled = true;
-  el.introCam.querySelector("span").textContent = "正在打开…";
+  el.introCam.querySelector("span").textContent = "正在开启摄像头…";
   try {
     if (!tracker) {
-      const { HandTracker } = await import("./hands.js?v=3.3");
+      const { HandTracker } = await import("./hands.js?v=4.3");
       tracker = new HandTracker(el.video, {
+        numHands: 1,
+        lite: settings.liteMode,
         onResult: onHands,
         onStatus: (s) => {
-          if (s === "camera") setStatus("等待摄像头授权…", "busy");
-          if (s === "model") setStatus("加载手势模型…", "busy");
+          if (s === "camera") setStatus("请在浏览器弹窗点「允许」使用摄像头…", "busy");
+          if (s === "model") setStatus("正在准备手势识别（首次约需几秒）…", "busy");
         },
       });
+    } else {
+      tracker.setLite(settings.liteMode);
     }
     await tracker.start();
     state.cameraOn = true;
@@ -859,17 +634,22 @@ async function startCamera() {
     resizeOverlay();
     refreshStatus();
     checkTutorial();
-    if (tracker.delegate === "CPU") toast("设备不支持 GPU 加速，识别会稍慢一些");
+    if (tracker.delegate === "CPU" && !settings.liteMode) {
+      settings.liteMode = true;
+      tracker.setLite(true);
+      if (el.liteMode) el.liteMode.checked = true;
+      toast("已自动为你开启手机流畅模式");
+    }
   } catch (error) {
     const messages = {
-      denied: "摄像头权限被拒绝了。在浏览器地址栏旁的权限设置里允许摄像头，再点一次。",
-      nocamera: "没找到摄像头。可以用下方按键或数字键 1–5 来弹。",
+      denied: "摄像头权限未开启。请在浏览器地址栏旁允许摄像头权限，或者直接点下方 1–5 号按键弹奏。",
+      nocamera: "没有检测到摄像头。你可以直接点下方 1–5 号按键弹奏。",
       insecure: "摄像头需要 https 或 localhost 打开页面。",
-      unsupported: "这个浏览器不支持摄像头，换 Chrome / Safari / Edge 试试。",
-      model: "手势模型没下载下来，检查网络后再点一次摄像头按钮。",
+      unsupported: "当前浏览器不支持开启摄像头，请换 Safari / Chrome，或直接点下方 1–5 号按键弹奏。",
+      model: "手势组件加载较慢，请先用下方 1–5 号按键弹奏，稍后再试摄像头。",
     };
-    setStatus("摄像头未开启", "error");
-    toast(messages[error.code] || "摄像头没能打开，稍后再试。", 6000);
+    setStatus("可点下方 1–5 号按键直接弹奏", "error");
+    toast(messages[error.code] || "未能打开摄像头，可先用下方 1–5 号按键弹奏。", 5000);
   } finally {
     el.camBtn.disabled = false;
     el.introCam.disabled = false;
@@ -901,16 +681,8 @@ function onHands(result, now) {
   const count = lm ? classifyHand(lm, vw / vh).count : undefined;
   const changedNow = stabilizer.push(count, now);
   if (changedNow) {
-    const prev = state.camFinger;
     state.camFinger = stabilizer.stable;
-    // 跟谱弹唱：从一个手势换成另一个手势（都是伸着手指）= 走到下一个和弦
-    if (settings.mode === "song" && prev > 0 && state.camFinger > 0 && prev !== state.camFinger) {
-      setSongPos(state.songPos + 1);
-      updateChord(true);
-      renderPads();
-    } else {
-      updateChord();
-    }
+    updateChord();
     renderLive();
   }
   if (settings.skeleton) drawHand(lm, vw, vh);
@@ -921,7 +693,6 @@ function onHands(result, now) {
 }
 let lastHadHand = false;
 
-// 画面坐标换算：video 是 object-fit: cover，可能镜像
 function mapPoint(p, vw, vh, cw, ch) {
   const scale = Math.max(cw / vw, ch / vh);
   const dw = vw * scale;
@@ -932,13 +703,13 @@ function mapPoint(p, vw, vh, cw, ch) {
 }
 
 let overlaySize = { w: 0, h: 0, dpr: 1 };
-let airDrumBox = null; // 相对舞台的坐标，缩放时更新，避免每帧读布局
-let accentColor = "#ABD1C6";
+let airDrumBox = null;
+let accentColor = "#ffb547";
 function resizeOverlay() {
   const rect = el.stage.getBoundingClientRect();
   const z = el.airDrum.getBoundingClientRect();
   airDrumBox = { l: z.left - rect.left, t: z.top - rect.top, r: z.right - rect.left, b: z.bottom - rect.top };
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = Math.min(settings.liteMode ? 1.25 : 2, window.devicePixelRatio || 1);
   overlaySize = { w: rect.width, h: rect.height, dpr };
   el.overlay.width = Math.round(rect.width * dpr);
   el.overlay.height = Math.round(rect.height * dpr);
@@ -958,8 +729,8 @@ function drawHand(lm, vw, vh) {
   const pts = lm.map((p) => mapPoint(p, vw, vh, w, h));
   ctx2d.lineCap = "round";
   ctx2d.lineJoin = "round";
-  ctx2d.strokeStyle = "rgba(255,255,255,0.7)";
-  ctx2d.lineWidth = 2.5;
+  ctx2d.strokeStyle = "rgba(255,255,255,0.68)";
+  ctx2d.lineWidth = 2.2;
   ctx2d.beginPath();
   for (const chain of BONES) {
     chain.forEach((idx, i) => {
@@ -972,12 +743,11 @@ function drawHand(lm, vw, vh) {
   for (const idx of [4, 8, 12, 16, 20]) {
     const [x, y] = pts[idx];
     ctx2d.beginPath();
-    ctx2d.arc(x, y, 5, 0, Math.PI * 2);
+    ctx2d.arc(x, y, 4.5, 0, Math.PI * 2);
     ctx2d.fill();
   }
 }
 
-// 手（任意指尖）一碰到「鼓」就切换，不用停留；手要先离开再碰才会再次切换，避免来回闪
 function checkAirDrum(lm, vw, vh, now) {
   if (!airDrumBox) return;
   const pad = 8;
@@ -990,77 +760,9 @@ function checkAirDrum(lm, vw, vh, now) {
   if (inside && !state.airDrumInside && now > state.airDrumCooldown) {
     setDrums(!settings.drumsOn);
     state.airDrumCooldown = now + 600;
-    el.airDrum.classList.remove("hit");
-    void el.airDrum.offsetWidth;
-    el.airDrum.classList.add("hit");
-    toast(settings.drumsOn ? "鼓：开" : "鼓：关", 1000);
+    toast(settings.drumsOn ? "鼓伴奏：已开启" : "鼓伴奏：已关闭", 1000);
   }
   state.airDrumInside = inside;
-}
-
-// ---------------- 截图识别（本机 OCR，按需加载 Tesseract.js） ----------------
-const TESSERACT_JS = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
-const TESSERACT_LANG = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/chi_sim/4.0.0_best_int";
-let ocrWorker = null;
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const tag = document.createElement("script");
-    tag.src = src;
-    tag.onload = resolve;
-    tag.onerror = reject;
-    document.head.appendChild(tag);
-  });
-}
-
-function ocrLines(data) {
-  if (data.lines?.length) return data.lines;
-  return (data.blocks || []).flatMap((b) => (b.paragraphs || []).flatMap((p) => p.lines || []));
-}
-
-async function recognizeScreenshot(file) {
-  const say = (t) => { el.ocrStatus.textContent = t; setStatus(t, "busy"); };
-  el.ocrBtn.disabled = true;
-  try {
-    if (!window.Tesseract) { say("正在下载识别程序…"); await loadScript(TESSERACT_JS); }
-    if (!ocrWorker) {
-      say("正在下载中文识别包（约 2 MB，只需一次）…");
-      ocrWorker = await window.Tesseract.createWorker("chi_sim", 1, {
-        langPath: TESSERACT_LANG,
-        logger: (m) => { if (m.status === "recognizing text") say(`识别中 ${Math.round((m.progress || 0) * 100)}%`); },
-      });
-    }
-    say("识别中…");
-    const { data } = await ocrWorker.recognize(file);
-    const sheet = sheetFromOcrLines(ocrLines(data));
-    const parsed = parseSheet(sheet);
-    el.songText.value = sheet;
-    el.importBox.open = true;
-    if (!el.songTitle.value) el.songTitle.value = file.name.replace(/\.[^.]+$/, "").slice(0, 30);
-    const guess = detectStyle(sheet, parsed.sequence);
-    el.ocrStatus.textContent = parsed.sequence.length
-      ? `识别出 ${parsed.lines.length} 行、${parsed.sequence.length} 个和弦，推荐曲风「${STYLES[guess.styleId].name}」（${guess.reason}）。请核对下面的文字，错字或认错的和弦可以直接改，然后点「识别并使用」。`
-      : "认出了文字，但没找到和弦。请确认截图里有 C、Am、G7 这样的和弦名，或者手动把和弦补进下面的文字里。";
-    el.songText.focus();
-  } catch {
-    el.ocrStatus.textContent = "识别没成功（可能网络下载识别包失败）。可以稍后再试，或直接复制文字谱粘贴。";
-  } finally {
-    el.ocrBtn.disabled = false;
-    refreshStatus();
-  }
-}
-
-// 跟谱弹唱：点按键 / 键盘跳到某个和弦并弹出来
-async function jumpSong(pos) {
-  await ensureAudioReady();
-  setSongPos(pos);
-  if (!state.cameraOn) state.latchedFinger = 1;
-  const chord = chordFor(1);
-  state.activeFinger = computeFinger() || 1;
-  if (engine.running) engine.setChord(chord);
-  else { engine.chord = chord; engine.preview(chord); }
-  renderPads();
-  renderLive();
 }
 
 // ---------------- 伴奏 ----------------
@@ -1076,9 +778,6 @@ function releaseWakeLock() {
 async function togglePlay() {
   if (engine.running) {
     engine.stop();
-    state.heardChord = null;
-    state.heardStep = -1;
-    state.autoPos = -1;
     releaseWakeLock();
     renderPlay();
     renderBeats(null);
@@ -1088,45 +787,34 @@ async function togglePlay() {
   }
   const ok = await ensureAudioReady();
   if (!ok) {
-    toast("浏览器没允许播放声音，再点一次试试");
+    toast("请再点一次允许播放声音");
     return;
   }
   if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) tut.track = "keys"; }
+  if (!state.activeFinger) {
+    state.latchedFinger = 1;
+    state.activeFinger = 1;
+  }
   applyEngineSettings();
-  engine.chord = chordFor(state.activeFinger);
+  engine.chord = chordFor(state.activeFinger || 1);
   await engine.start();
   requestWakeLock();
+  renderPads();
   renderPlay();
   refreshStatus();
   renderLive();
 }
 
-// 每帧：节拍灯、自动走谱 HUD、性能信息
 let perfTick = 0;
 function frame(now) {
   if (engine.running) {
     const info = engine.drainUI();
-    if (info) {
-      renderBeats(info);
-      if (!info.countIn) {
-        state.heardStep = info.i;
-        if (settings.mode === "auto") {
-          const prog = engine.progression;
-          const idx = engine.progressIndex(info.i);
-          if (idx !== state.autoPos) {
-            state.autoPos = idx;
-            state.heardChord = prog[idx];
-            renderPads();
-            renderLive();
-          }
-        }
-      }
-    }
+    if (info) renderBeats(info);
   }
   if (settings.perf && now - perfTick > 500) {
     perfTick = now;
     const parts = [];
-    if (tracker?.active) parts.push(`识别 ${tracker.stats.fps}fps`, `推理 ${tracker.stats.inferMs.toFixed(1)}ms`, tracker.delegate);
+    if (tracker?.active) parts.push(`识别 ${tracker.stats.fps}fps`, `耗时 ${tracker.stats.inferMs.toFixed(0)}ms`, tracker.delegate);
     const lat = engine.latencyMs;
     if (lat !== null) parts.push(`音频 ${lat}ms`);
     el.perf.textContent = parts.join(" · ") || "未开始";
@@ -1139,7 +827,7 @@ function updateCta() {
   const full = !state.cameraOn && state.ctaFull;
   el.intro.hidden = !full;
   el.camPill.hidden = state.cameraOn || full;
-  el.introCam.querySelector("span").textContent = "开启摄像头";
+  el.introCam.querySelector("span").textContent = "第 1 步：点这里开启摄像头";
 }
 
 function hideIntro() {
@@ -1148,26 +836,23 @@ function hideIntro() {
   updateCta();
 }
 
-// ---------------- 新手教程 ----------------
-// 每一步都等用户真的做到了才往下走，做到的那一刻自动跳到下一步
+// ---------------- 新手一步步引导 ----------------
 const tut = { active: false, track: "camera", i: 0 };
 
 function tutorialSteps() {
   const n = (f) => `<b>${escapeHtml(soundingName(settings.bindings[f]))}</b>`;
   if (tut.track === "keys") {
     return [
-      { text: `点下方的 ${n(1)} 键，听一下`, done: () => state.activeFinger === 1 },
-      { text: `再点 ${n(2)} 键换个和弦（电脑上也能按数字键 1–5）`, done: () => state.activeFinger === 2 },
-      { text: "点左下角「开始伴奏」，鼓和节奏会跟上", done: () => engine.running },
-      { text: "想用手势弹？点画面中间的「开启摄像头」", done: () => state.cameraOn },
+      { text: `第 1 步：点下方第 1 个大按键 ${n(1)}，听听吉他的声音`, done: () => state.activeFinger === 1 },
+      { text: `第 2 步：再点第 2 个按键 ${n(2)} 换个和弦`, done: () => state.activeFinger === 2 },
+      { text: "第 3 步：点左下角橙色「开始伴奏」，经典分解与鼓点会自动跟上！", done: () => engine.running },
     ];
   }
   return [
-    { text: "点画面中间的「开启摄像头」，浏览器问权限时点「允许」", done: () => state.cameraOn },
-    { text: `<span class="big">☝️</span>对着镜头伸出 1 根食指，会弹出 ${n(1)}`, done: () => state.camFinger === 1 },
-    { text: `<span class="big">✌️</span>换成 2 根手指，和弦变成 ${n(2)}`, done: () => state.camFinger === 2 },
-    { text: '<span class="big">✊</span>握拳，声音就停了', done: () => state.camFinger === 0 },
-    { text: "点左下角「开始伴奏」，鼓点响起后边换手势边弹", done: () => engine.running },
+    { text: "第 1 步：点画面中间的「开启摄像头」，浏览器询问时点「允许」", done: () => state.cameraOn },
+    { text: `<span class="big">☝️</span>第 2 步：对着镜头伸出 1 根食指，弹响 ${n(1)}`, done: () => state.camFinger === 1 },
+    { text: `<span class="big">✌️</span>第 3 步：换成 2 根手指，声音切换到 ${n(2)}（握拳✊即可静音）`, done: () => state.camFinger === 2 },
+    { text: "第 4 步：点左下角「开始伴奏」，边伸手指边享受弹吉他的感觉！", done: () => engine.running },
   ];
 }
 
@@ -1183,24 +868,18 @@ function finishTutorial(completed) {
   el.coach.hidden = true;
   settings.tutorialDone = true;
   save();
-  if (completed) toast("教程完成！以后想再看，点右上角的「?」", 3600);
+  if (completed) toast("太棒了，你已经学会了！想换音色或节奏可点右上角设置图标", 3600);
 }
 
 function checkTutorial() {
   if (!tut.active) return;
   const steps = tutorialSteps();
-  const before = tut.i;
   while (tut.i < steps.length && steps[tut.i].done()) tut.i += 1;
   if (tut.i >= steps.length) { finishTutorial(true); return; }
   el.coach.hidden = false;
-  el.coachStep.textContent = `新手教程 ${tut.i + 1}/${steps.length}`;
+  el.coachStep.textContent = `新手引导 ${tut.i + 1}/${steps.length}`;
   el.coachText.innerHTML = steps[tut.i].text;
   el.coachBar.style.width = `${(tut.i / steps.length) * 100}%`;
-  if (tut.i !== before) {
-    el.coach.classList.remove("done-flash");
-    void el.coach.offsetWidth;
-    el.coach.classList.add("done-flash");
-  }
 }
 
 // ---------------- 事件 ----------------
@@ -1229,40 +908,18 @@ function bindUi() {
   el.settingsBtn.addEventListener("click", () => openSheet(!sheetIsOpen()));
   el.sheetClose.addEventListener("click", () => openSheet(false));
   el.scrim.addEventListener("click", () => openSheet(false));
-  el.rhythmChip.addEventListener("click", () => {
-    openSheet(true);
-    (settings.style === "strum" ? el.strumPattern : settings.style === "arp" ? el.arpPattern : el.customKeys).scrollIntoView({ block: "center", behavior: "smooth" });
-  });
+  el.rhythmChip.addEventListener("click", () => openSheet(!sheetIsOpen()));
 
   el.playBtn.addEventListener("click", togglePlay);
   el.bpmDown.addEventListener("click", () => setBpm(settings.bpm - (settings.bpm > 60 ? 2 : 1)));
   el.bpmUp.addEventListener("click", () => setBpm(settings.bpm + 2));
   el.bpmInput.addEventListener("change", () => setBpm(el.bpmInput.value));
-  onSeg(el.modeSeg, (v) => {
-    settings.mode = v;
-    state.heardChord = null;
-    state.autoPos = -1;
-    if (v !== "free" && engine.running && v === "song") state.songPos = 0;
-    changed({ rerenderPads: true });
-    const tips = {
-      free: "自由弹：1–5 根手指各弹一个和弦",
-      song: `跟谱弹唱「${song.title}」：伸出手指开始弹，每换一次手势走到下一个和弦（没摄像头就点下方「下一个」）`,
-      auto: `自动走谱「${song.title}」：和弦每小节自动换，点「开始伴奏」跟着唱`,
-    };
-    renderSongInfo();
-    toast(tips[v], 4200);
-  });
 
-  // 按键：摄像头开着时按住才响；没开摄像头时点一下锁定
   el.pads.addEventListener("pointerdown", (e) => {
     const pad = e.target.closest(".pad");
     if (!pad) return;
     e.preventDefault();
     if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) tut.track = "keys"; }
-    if (pad.dataset.pos !== undefined) {
-      if (settings.mode === "song") jumpSong(Number(pad.dataset.pos));
-      return;
-    }
     const f = Number(pad.dataset.finger);
     if (state.cameraOn) {
       pad.setPointerCapture?.(e.pointerId);
@@ -1280,8 +937,7 @@ function bindUi() {
   el.pads.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       const pad = e.target.closest(".pad");
-      if (pad?.dataset.pos !== undefined) { e.preventDefault(); e.stopPropagation(); if (settings.mode === "song") jumpSong(Number(pad.dataset.pos)); }
-      else if (pad) { e.preventDefault(); e.stopPropagation(); pressFinger(Number(pad.dataset.finger), { latch: true }); }
+      if (pad) { e.preventDefault(); e.stopPropagation(); pressFinger(Number(pad.dataset.finger), { latch: true }); }
     }
   });
   el.airDrum.addEventListener("click", () => setDrums(!settings.drumsOn));
@@ -1290,12 +946,6 @@ function bindUi() {
   document.addEventListener("keydown", (e) => {
     if (e.target.closest?.("input, select, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key;
-    if (settings.mode === "song" && (/^[1-5]$/.test(k) || k === "ArrowRight" || k === "ArrowLeft")) {
-      e.preventDefault();
-      if (e.repeat) return;
-      jumpSong(state.songPos + (k === "ArrowLeft" ? -1 : state.activeFinger ? 1 : 0));
-      return;
-    }
     if (/^[1-5]$/.test(k)) {
       e.preventDefault();
       if (held.has(k)) return;
@@ -1318,17 +968,16 @@ function bindUi() {
     } else if (k === "s" || k === "S") {
       openSheet(!sheetIsOpen());
     } else if (k === "Escape") {
-      if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) { tut.track = "keys"; checkTutorial(); } } else if (!isDesktop()) openSheet(false);
+      if (!el.intro.hidden) { hideIntro(); if (tut.active && tut.i === 0) { tut.track = "keys"; checkTutorial(); } } else openSheet(false);
     }
   });
   document.addEventListener("keyup", (e) => {
     if (!/^[1-5]$/.test(e.key)) return;
     held.delete(e.key);
-    if (state.cameraOn && settings.mode === "free") releaseFinger(Number(e.key));
+    if (state.cameraOn) releaseFinger(Number(e.key));
   });
   window.addEventListener("blur", () => { held.clear(); if (state.manualFinger) { state.manualFinger = null; updateChord(); } });
 
-  // iOS 来电、切后台后音频会被挂起：下一次触屏时恢复
   document.addEventListener("pointerdown", () => {
     if (engine.ctx && engine.ctx.state !== "running") engine.unlock();
   }, { passive: true, capture: true });
@@ -1340,7 +989,6 @@ function bindUi() {
 
 // ---------------- 启动 ----------------
 function init() {
-  loadSong(settings.songId, { rebind: false });
   applyTheme();
   fillSelects();
   renderSettings();
@@ -1350,18 +998,23 @@ function init() {
   renderPlay();
   bindSettings();
   bindUi();
-  openSheet(isDesktop());
+  openSheet(false);
   applyEngineSettings();
   updateCta();
   if (!settings.tutorialDone) startTutorial();
   refreshStatus();
   requestAnimationFrame(frame);
-  // 空闲时预先下载默认音色（不到 1MB），首次出声不用等
-  const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1200));
-  idle(() => { if (!instrumentLoad) { try { loadInstrument(); } catch {} } }, { timeout: 2500 });
+  const preloadSoon = () => {
+    const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 400));
+    idle(() => { if (!instrumentLoad) { try { loadInstrument(); } catch {} } }, { timeout: 1500 });
+  };
+  if (document.readyState === "complete") preloadSoon();
+  else window.addEventListener("load", preloadSoon, { once: true });
 }
 
 init();
 
-// 调试/测试入口
-window.airGuitar = { engine, settings, state, jumpSong, recognizeScreenshot, get song() { return song; }, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll, get tracker() { return tracker; } };
+window.airGuitar = {
+  engine, settings, state, classifyHand, pressFinger, releaseFinger, togglePlay, muteAll,
+  get tracker() { return tracker; },
+};

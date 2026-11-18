@@ -1,9 +1,11 @@
 // 摄像头 + MediaPipe HandLandmarker（tasks-vision，GPU 优先）。
 // 只在用户点「开启摄像头」时才下载模型，首屏不背这几 MB。
+// 针对低配手机/弱网提供多 CDN 回退、低分辨率省电档位（lite）与帧率节流。
 
 const TASKS_VERSION = "0.10.21";
 const CDN_BASES = [
   `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VERSION}`,
+  `https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VERSION}`,
   `https://unpkg.com/@mediapipe/tasks-vision@${TASKS_VERSION}`,
 ];
 const MODEL_URL = new URL("../models/hand_landmarker.task", import.meta.url).href;
@@ -29,15 +31,27 @@ async function loadVision() {
   return visionPromise;
 }
 
+export function detectLowEndDevice() {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  const mem = typeof navigator !== "undefined" ? (navigator.deviceMemory || 8) : 8;
+  const cores = typeof navigator !== "undefined" ? (navigator.hardwareConcurrency || 8) : 8;
+  const saveData = Boolean(typeof navigator !== "undefined" && navigator.connection?.saveData);
+  return saveData || mem <= 4 || cores <= 4 || isMobile;
+}
+
 export class HandTracker {
-  constructor(video, { onResult, onStatus } = {}) {
+  constructor(video, { onResult, onStatus, numHands = 1, lite = false } = {}) {
     this.video = video;
     this.onResult = onResult;
     this.onStatus = onStatus;
+    this.numHands = numHands;
+    this.lite = lite;
     this.landmarker = null;
     this.stream = null;
     this.running = false;
     this.lastVideoTime = -1;
+    this.lastInferAt = 0;
     this.delegate = null;
     this.frameHandle = null;
     this.stats = { fps: 0, inferMs: 0 };
@@ -46,6 +60,21 @@ export class HandTracker {
 
   get active() { return this.running; }
 
+  setLite(lite) {
+    this.lite = Boolean(lite);
+  }
+
+  async setNumHands(numHands) {
+    const n = numHands === 2 ? 2 : 1;
+    if (this.numHands === n) return;
+    this.numHands = n;
+    if (this.landmarker?.setOptions) {
+      try {
+        await this.landmarker.setOptions({ numHands: n });
+      } catch {}
+    }
+  }
+
   async createLandmarker() {
     if (this.landmarker) return this.landmarker;
     this.onStatus?.("model");
@@ -53,7 +82,7 @@ export class HandTracker {
     const options = (delegate) => ({
       baseOptions: { modelAssetPath: MODEL_URL, delegate },
       runningMode: "VIDEO",
-      numHands: 1,
+      numHands: this.numHands,
       minHandDetectionConfidence: 0.5,
       minHandPresenceConfidence: 0.5,
       minTrackingConfidence: 0.5,
@@ -65,7 +94,6 @@ export class HandTracker {
       this.landmarker = await mod.HandLandmarker.createFromOptions(fileset, options("CPU"));
       this.delegate = "CPU";
     }
-    // 预热：GPU 首帧要编译着色器（桌面实测约 3 秒），放在加载阶段做，开摄像头后就不会卡一下
     try {
       const c = document.createElement("canvas");
       c.width = 96;
@@ -81,16 +109,13 @@ export class HandTracker {
     if (!window.isSecureContext) throw Object.assign(new Error("insecure"), { code: "insecure" });
     if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("unsupported"), { code: "unsupported" });
     this.onStatus?.("camera");
+    const videoConstraints = this.lite
+      ? { facingMode: "user", width: { ideal: 480 }, height: { ideal: 360 }, frameRate: { ideal: 24, max: 30 } }
+      : { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 60 } };
     const streamPromise = navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: {
-        facingMode: "user",
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-        frameRate: { ideal: 30, max: 60 },
-      },
+      video: videoConstraints,
     });
-    // 摄像头授权和模型下载并行
     const modelPromise = this.createLandmarker();
     let stream;
     try {
@@ -106,6 +131,7 @@ export class HandTracker {
     try { await this.video.play(); } catch {}
     try {
       await modelPromise;
+      await this.setNumHands(this.numHands);
     } catch (error) {
       this.stopStream();
       throw Object.assign(error, { code: "model" });
@@ -128,8 +154,12 @@ export class HandTracker {
   process() {
     if (!this.running) return;
     const video = this.video;
-    if (video.readyState >= 2 && video.currentTime !== this.lastVideoTime && !document.hidden) {
+    const now = performance.now();
+    // 轻量档或推理耗时较长时自动节流（约 22fps），避免低配手机发烫卡顿
+    const minInterval = this.lite || this.stats.inferMs > 28 ? 42 : 0;
+    if (video.readyState >= 2 && video.currentTime !== this.lastVideoTime && !document.hidden && now - this.lastInferAt >= minInterval) {
       this.lastVideoTime = video.currentTime;
+      this.lastInferAt = now;
       const t0 = performance.now();
       let result = null;
       try {

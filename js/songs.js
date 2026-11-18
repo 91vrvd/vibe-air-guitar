@@ -1,4 +1,4 @@
-// 歌曲：内置几首公有领域的歌 + 和弦练习走向，以及把用户粘贴的“文字谱”解析成 歌词 + 和弦。
+// 歌曲：内置公有领域的歌 + 经典和弦走向 + 把用户粘贴的“文字谱”解析成 歌词 + 和弦。
 // 不内置受版权保护的歌词；用户可以从有谱么等网站复制自己看到的文字谱粘贴进来（只存在本机浏览器）。
 //
 // 支持三种写法：
@@ -8,84 +8,43 @@
 //      长亭外    古道边
 // 3. 只有和弦：C G Am F（用来练和弦走向）
 
-import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=3.3";
+import { normalizeChord, parseChord, NOTE_NAMES } from "./theory.js?v=4.0";
 
 // 曲风：选歌或导入时自动配好速度、弹法、节奏型和鼓（用户之后仍可在设置里改）
 // 字段：bpm 速度；style 弹法 strum 扫弦 / arp 分解；strumId / arpId 见 patterns.js；drumsOn 是否开鼓；drumId 鼓型
 export const STYLES = {
   ballad: { name: "抒情慢歌", bpm: 72, style: "arp", arpId: "slow", drumsOn: true, drumId: "ballad" },
   folk: { name: "民谣弹唱", bpm: 88, style: "strum", strumId: "bass_folk", drumsOn: true, drumId: "folk" },
+  campfire: { name: "篝火轻快", bpm: 96, style: "strum", strumId: "campfire", drumsOn: true, drumId: "folk" },
   pop: { name: "流行", bpm: 100, style: "strum", strumId: "chop", drumsOn: true, drumId: "pop" },
   rock: { name: "摇滚", bpm: 124, style: "strum", strumId: "rock", drumsOn: true, drumId: "rock" },
   kids: { name: "儿歌", bpm: 96, style: "strum", strumId: "quarters", drumsOn: true, drumId: "light" },
   waltz: { name: "三拍子（华尔兹）", bpm: 100, style: "strum", strumId: "waltz", drumsOn: true, drumId: "standard" },
   waltz_fingers: { name: "三拍子指弹", bpm: 80, style: "arp", arpId: "waltz_arp", drumsOn: false, drumId: "light" },
   fingerstyle: { name: "安静指弹", bpm: 76, style: "arp", arpId: "travis", drumsOn: false, drumId: "light" },
+  bossa: { name: "波萨诺瓦", bpm: 92, style: "arp", arpId: "bossa_arp", drumsOn: true, drumId: "bossa" },
   blues: { name: "布鲁斯", bpm: 90, style: "strum", strumId: "shuffle", drumsOn: true, drumId: "shuffle" },
   reggae: { name: "雷鬼", bpm: 92, style: "strum", strumId: "ska", drumsOn: true, drumId: "reggae" },
 };
 
+// 内置谱已按用户要求全部清空；保留「经典好听和弦组合（小白套路）」供直接切换，用户也可自己粘贴或截图导入谱子
 export const BUILTIN_SONGS = [
-  {
-    id: "songbie",
-    style: "ballad",
-    title: "送别（李叔同词，公有领域）",
-    key: "C",
-    text: `[C]长亭外，[F]古道[C]边，芳草碧连[G]天。
-[C]晚风拂柳[F]笛声[C]残，夕阳[G]山外[C]山。
-[F]天之涯，[C]地之角，[Dm]知交半零[G]落。
-[C]一壶浊酒[F]尽余[C]欢，今宵[G]别梦[C]寒。`,
-  },
-  {
-    id: "birthday",
-    style: "waltz",
-    title: "生日快乐（公有领域）",
-    key: "C",
-    text: `[C]祝你生日[G]快乐，
-祝你生日[C]快乐，
-祝你生[F]日快乐，
-[C]祝你[G]生日[C]快乐。`,
-  },
-  {
-    id: "twinkle",
-    style: "kids",
-    title: "小星星（传统儿歌）",
-    key: "C",
-    text: `[C]一闪一闪[F]亮晶[C]晶，
-[F]满天[C]都是[G]小星[C]星。
-[C]挂在[F]天上[C]放光[G]明，
-[C]好像[F]许多[C]小眼[G]睛。
-[C]一闪一闪[F]亮晶[C]晶，
-[F]满天[C]都是[G]小星[C]星。`,
-  },
-  {
-    id: "amazing_grace",
-    style: "waltz_fingers",
-    title: "Amazing Grace（公有领域）",
-    key: "G",
-    text: `A[G]mazing grace, how [C]sweet the [G]sound
-That saved a wretch like [D]me
-I [G]once was lost, but [C]now am [G]found
-Was [Em]blind, but [D]now I [G]see`,
-  },
-  { id: "p_pop", style: "pop", title: "和弦练习：流行 1-5-6-4（C G Am F）", key: "C", text: "C G Am F" },
-  { id: "p_canon", style: "ballad", title: "和弦练习：卡农（C G Am Em F C F G）", key: "C", text: "C G Am Em F C F G" },
-  { id: "p_50s", style: "folk", title: "和弦练习：50 年代（C Am F G）", key: "C", text: "C Am F G" },
-  { id: "p_sad", style: "ballad", title: "和弦练习：小调抒情（Am F C G）", key: "C", text: "Am F C G" },
-  { id: "p_jpop", style: "pop", title: "和弦练习：日系 4-5-3-6（F G Em Am）", key: "C", text: "F G Em Am" },
-  { id: "p_folk", style: "folk", title: "和弦练习：民谣 G 调（G D Em C）", key: "G", text: "G D Em C" },
-  { id: "p_251", style: "fingerstyle", title: "和弦练习：爵士 2-5-1（Dm7 G7 Cmaj7）", key: "C", text: "Dm7 G7 Cmaj7" },
-  { id: "p_blues", style: "blues", title: "和弦练习：12 小节布鲁斯（A 调）", key: "A", text: "A7 A7 A7 A7 D7 D7 A7 A7 E7 D7 A7 E7" },
+  { id: "p_pop", style: "folk", title: "万能流行民谣（C · G · Am · F）", key: "C", text: "C G Am F" },
+  { id: "p_canon", style: "ballad", title: "卡农经典走向（C · G · Am · Em · F · C · F · G）", key: "C", text: "C G Am Em F C F G" },
+  { id: "p_sad", style: "ballad", title: "温柔抒情慢歌（Am · F · C · G）", key: "C", text: "Am F C G" },
+  { id: "p_jpop", style: "pop", title: "日系轻快（F · G · Em · Am）", key: "C", text: "F G Em Am" },
+  { id: "p_folk", style: "campfire", title: "民谣弹唱 G 调（G · D · Em · C）", key: "G", text: "G D Em C" },
+  { id: "p_251", style: "fingerstyle", title: "慵懒爵士（Dm7 · G7 · Cmaj7）", key: "C", text: "Dm7 G7 Cmaj7" },
 ];
 
 // 和弦记号：支持 C、C#m7、Bbmaj7、Dsus4、G/B（斜线低音按根音处理）
-const CHORD_TOKEN = /^[A-G][#b♯♭]?(maj7|M7|m7|min7|m|min|7|sus2|sus4|sus|dim|aug|add9|6|9|M)?(\/[A-G][#b♯♭]?)?$/;
+const CHORD_TOKEN = /^[A-G][#b♯♭]?(maj7|M7|m7|min7|m6|min6|m|min|7|sus2|sus4|sus|dim7|dim|aug|add9|add2|6|9|M)?(\/[A-G][#b♯♭]?)?$/;
 
-/** 把各种写法变成本应用支持的和弦名；不认识的扩展（add9、6、9）退回到基本三和弦 */
+/** 把各种写法变成本应用支持的和弦名；不认识的扩展（add9、6、9）退回到基本三和弦以保持向后兼容 */
 export function chordToken(raw) {
   const t = String(raw || "").trim().replace(/[()（）]/g, "");
   if (!CHORD_TOKEN.test(t)) return "";
-  const base = t.split("/")[0].replace(/(add9|6|9)$/, "");
+  const base = t.split("/")[0].replace(/(add9|add2|6|9)$/, "");
   return normalizeChord(base);
 }
 
@@ -99,7 +58,7 @@ function charIndexAtColumn(text, col) {
   let w = 0;
   for (let i = 0; i < text.length; i += 1) {
     if (w >= col) return i;
-    w += /[⺀-￿]/.test(text[i]) ? 2 : 1;
+    w += /[\u2e80-\uffff]/.test(text[i]) ? 2 : 1;
   }
   return text.length;
 }
@@ -292,6 +251,7 @@ export function detectStyle(text, sequence) {
   const words = [
     [/摇滚|rock/i, "rock", "谱里写了摇滚"],
     [/布鲁斯|blues/i, "blues", "谱里写了布鲁斯"],
+    [/波萨|bossa/i, "bossa", "谱里写了波萨诺瓦"],
     [/雷鬼|reggae/i, "reggae", "谱里写了雷鬼"],
     [/儿歌|童谣/, "kids", "谱里写了儿歌"],
     [/指弹|分解/, "fingerstyle", "谱里写了指弹/分解"],
